@@ -935,8 +935,7 @@ class ProxyService(
         live_websocket_connector: LiveWebSocketConnector = connect_live_websocket,
     ) -> None:
         self._repo_factory = repo_factory
-        self._clock = clock
-        self._scheduler = scheduler
+        self._clock, self._scheduler = clock, scheduler
         self._encryptor = TokenEncryptor()
         self._load_balancer = LoadBalancer(repo_factory, clock=clock)
         self._capability_router = CapabilityRouter(repo_factory)
@@ -1506,7 +1505,6 @@ class ProxyService(
         )
 
     def _remaining_budget_seconds(self, deadline: float) -> float:
-        """Read freshness budgets from the injected clock used by simulations."""
         return max(0.0, deadline - self._clock.monotonic())
 
     async def _ensure_previsible_unary_fresh_with_failover(
