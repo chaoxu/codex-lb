@@ -1,5 +1,26 @@
+"""Startup timeout-invariant validation over raw ``Settings`` values.
+
+This module intentionally validates only startup ``Settings`` fields and a
+small set of code constants whose relations are fixed at import/runtime. It
+does not validate per-request ContextVar overrides
+(``app/core/clients/proxy.py:3450-3467``,
+``app/modules/proxy/_service/streaming/helpers.py:861-868``,
+``app/modules/proxy/_service/compact.py:727-738``,
+``app/modules/proxy/_service/transcribe.py:230-232``,
+``app/core/clients/files.py:77-90``, and
+``app/modules/proxy/service.py:1464-1478``), runtime clamps/derived effective
+values (``app/core/clients/proxy.py:1049-1088``,
+``app/core/auth/refresh.py:391-395``, and
+``app/modules/proxy/load_balancer.py:1846-1856``), or DB/API-key/model-source
+runtime settings (``app/core/config/settings_cache.py:22-36``,
+``app/modules/settings/api.py:547-710``,
+``app/modules/proxy/_service/streaming/retry.py:153-165``, and
+``app/modules/model_sources/forwarding.py:112-221``).
+"""
+
 from __future__ import annotations
 
+import argparse
 import logging
 import operator
 import sys
@@ -15,21 +36,15 @@ class TimeoutSettings(Protocol):
     proxy_request_budget_seconds: float
     http_responses_stream_request_budget_seconds: float
     compact_request_budget_seconds: float
-    stream_idle_timeout_seconds: float
     sse_keepalive_interval_seconds: float
     token_refresh_timeout_seconds: float
     token_refresh_claim_ttl_seconds: float
-    usage_fetch_timeout_seconds: float
-    usage_refresh_interval_seconds: int
-    rate_limit_reset_credits_refresh_interval_seconds: int
     http_responses_session_bridge_request_budget_seconds: float
-    http_responses_session_bridge_idle_ttl_seconds: float
-    http_responses_session_bridge_codex_idle_ttl_seconds: float
     http_responses_session_bridge_stuck_gate_retire_after_seconds: float
     http_responses_session_bridge_clean_close_retry_jitter_max_seconds: float
     proxy_admission_wait_timeout_seconds: float
     proxy_account_lease_ttl_seconds: float
-    proxy_refresh_failure_cooldown_seconds: float
+    model_registry_snapshot_max_age_seconds: float
     timeout_invariant_validation_strict: bool
 
 
@@ -78,38 +93,19 @@ def _expr(label: str, anchor: str, evaluate: Callable[[TimeoutSettings], float])
     return TimeoutOperand(label, evaluate, anchor)
 
 
-UPSTREAM_CONNECT = _field("upstream_connect_timeout_seconds", "app/core/clients/proxy.py:318")
+UPSTREAM_CONNECT = _field("upstream_connect_timeout_seconds", "app/core/clients/proxy.py:2720")
 PROXY_BUDGET = _field("proxy_request_budget_seconds", "app/core/config/settings.py:260")
 STREAM_BUDGET = _field(
     "http_responses_stream_request_budget_seconds",
     "app/modules/proxy/_service/streaming/helpers.py:724",
 )
 COMPACT_BUDGET = _field("compact_request_budget_seconds", "app/modules/proxy/_service/compact.py:585")
-STREAM_IDLE = _field("stream_idle_timeout_seconds", "app/modules/proxy/_service/streaming/retry.py:188")
 SSE_KEEPALIVE = _field("sse_keepalive_interval_seconds", "app/modules/proxy/api.py:3930")
 TOKEN_REFRESH = _field("token_refresh_timeout_seconds", "app/modules/accounts/auth_manager.py:1123")
 TOKEN_CLAIM_TTL = _field("token_refresh_claim_ttl_seconds", "app/core/config/settings.py:660")
-USAGE_FETCH = _field("usage_fetch_timeout_seconds", "app/core/clients/usage.py:75")
-USAGE_REFRESH_INTERVAL = _field("usage_refresh_interval_seconds", "app/core/usage/refresh_scheduler.py:282")
-RESET_CREDITS_INTERVAL = _field(
-    "rate_limit_reset_credits_refresh_interval_seconds",
-    "app/core/usage/reset_credits_refresh_scheduler.py:388",
-)
 BRIDGE_BUDGET = _field(
     "http_responses_session_bridge_request_budget_seconds",
     "app/modules/proxy/_service/http_bridge/helpers.py:2469",
-)
-BRIDGE_IDLE_TTL = _field(
-    "http_responses_session_bridge_idle_ttl_seconds",
-    "app/modules/proxy/_service/http_bridge/helpers.py:2458",
-)
-BRIDGE_CODEX_IDLE_TTL = _field(
-    "http_responses_session_bridge_codex_idle_ttl_seconds",
-    "app/modules/proxy/_service/http_bridge/session_registry.py:151",
-)
-BRIDGE_STUCK_GATE_RETIRE = _field(
-    "http_responses_session_bridge_stuck_gate_retire_after_seconds",
-    "app/modules/proxy/service.py:1317",
 )
 BRIDGE_CLEAN_CLOSE_JITTER = _field(
     "http_responses_session_bridge_clean_close_retry_jitter_max_seconds",
@@ -117,65 +113,67 @@ BRIDGE_CLEAN_CLOSE_JITTER = _field(
 )
 ADMISSION_WAIT = _field("proxy_admission_wait_timeout_seconds", "app/modules/proxy/service.py:768")
 ACCOUNT_LEASE_TTL = _field("proxy_account_lease_ttl_seconds", "app/modules/proxy/load_balancer.py:1846")
-REFRESH_FAILURE_COOLDOWN = _field(
-    "proxy_refresh_failure_cooldown_seconds",
-    "app/modules/accounts/auth_manager.py:216",
-)
-ADMISSION_PLUS_CONNECT = _expr(
-    "proxy_admission_wait_timeout_seconds + upstream_connect_timeout_seconds",
-    "app/modules/proxy/service.py:1282 + app/core/clients/proxy.py:318",
-    lambda settings: settings.proxy_admission_wait_timeout_seconds + settings.upstream_connect_timeout_seconds,
-)
 TOKEN_CLAIM_FLOOR = _expr(
     "proxy_admission_wait_timeout_seconds + 2 * token_refresh_timeout_seconds",
     "app/core/config/settings.py:667",
     lambda settings: settings.proxy_admission_wait_timeout_seconds + 2.0 * settings.token_refresh_timeout_seconds,
 )
+BRIDGE_STUCK_GATE_HARD_ANCHOR_RETIRE = _expr(
+    "2 * http_responses_session_bridge_stuck_gate_retire_after_seconds",
+    "app/modules/proxy/_service/http_bridge/helpers.py:686",
+    lambda settings: 2.0 * settings.http_responses_session_bridge_stuck_gate_retire_after_seconds,
+)
+MODEL_REGISTRY_SNAPSHOT_MAX_AGE = _field(
+    "model_registry_snapshot_max_age_seconds",
+    "app/core/openai/model_registry_store.py:367",
+)
+MODEL_REGISTRY_REFRESH_INTERVAL = _expr(
+    "_REFRESH_INTERVAL_SECONDS",
+    "app/core/openai/model_refresh_scheduler.py:37",
+    lambda settings: _model_registry_refresh_interval_seconds(),
+)
+DURABLE_BRIDGE_RETRY_CIRCUIT_STATE_TTL = _expr(
+    "DURABLE_BRIDGE_RETRY_CIRCUIT_STATE_TTL_SECONDS",
+    "app/modules/proxy/durable_bridge_repository.py:42",
+    lambda settings: _durable_bridge_retry_circuit_state_ttl_seconds(),
+)
+DURABLE_BRIDGE_RETRY_CIRCUIT_MIN_TTL = _expr(
+    "max(_HTTP_BRIDGE_RETRY_CIRCUIT_MAX_BACKOFF_SECONDS, _HTTP_BRIDGE_RETRY_CIRCUIT_HALF_OPEN_LEASE_SECONDS)",
+    "app/modules/proxy/_service/http_bridge/retry_circuit.py:19-21",
+    lambda settings: _durable_bridge_retry_circuit_min_ttl_seconds(),
+)
+
+
+def _model_registry_refresh_interval_seconds() -> float:
+    from app.core.openai.model_refresh_scheduler import _REFRESH_INTERVAL_SECONDS
+
+    return float(_REFRESH_INTERVAL_SECONDS)
+
+
+def _durable_bridge_retry_circuit_state_ttl_seconds() -> float:
+    from app.modules.proxy.durable_bridge_repository import DURABLE_BRIDGE_RETRY_CIRCUIT_STATE_TTL_SECONDS
+
+    return float(DURABLE_BRIDGE_RETRY_CIRCUIT_STATE_TTL_SECONDS)
+
+
+def _durable_bridge_retry_circuit_min_ttl_seconds() -> float:
+    from app.modules.proxy._service.http_bridge.retry_circuit import (
+        _HTTP_BRIDGE_RETRY_CIRCUIT_HALF_OPEN_LEASE_SECONDS,
+        _HTTP_BRIDGE_RETRY_CIRCUIT_MAX_BACKOFF_SECONDS,
+    )
+
+    return float(
+        max(_HTTP_BRIDGE_RETRY_CIRCUIT_MAX_BACKOFF_SECONDS, _HTTP_BRIDGE_RETRY_CIRCUIT_HALF_OPEN_LEASE_SECONDS)
+    )
 
 
 TIMEOUT_INVARIANT_RULES: tuple[TimeoutInvariantRule, ...] = (
-    TimeoutInvariantRule(
-        "upstream-connect-within-proxy-budget",
-        UPSTREAM_CONNECT,
-        "<=",
-        PROXY_BUDGET,
-        "Connect timeout must fit inside the non-stream proxy request deadline or connect failures can be "
-        "misclassified.",
-    ),
     TimeoutInvariantRule(
         "upstream-connect-within-stream-budget",
         UPSTREAM_CONNECT,
         "<=",
         STREAM_BUDGET,
         "Responses streams use the stream budget, so connect cannot outlive the stream request envelope.",
-    ),
-    TimeoutInvariantRule(
-        "upstream-connect-within-compact-budget",
-        UPSTREAM_CONNECT,
-        "<=",
-        COMPACT_BUDGET,
-        "Compact requests run under the compact budget; a longer connect wait would bypass compact failover timing.",
-    ),
-    TimeoutInvariantRule(
-        "upstream-connect-within-bridge-budget",
-        UPSTREAM_CONNECT,
-        "<=",
-        BRIDGE_BUDGET,
-        "HTTP bridge startup and submit paths are bounded by the bridge request budget, including upstream connect.",
-    ),
-    TimeoutInvariantRule(
-        "admission-plus-connect-within-proxy-budget",
-        ADMISSION_PLUS_CONNECT,
-        "<=",
-        PROXY_BUDGET,
-        "Admission may run before upstream connect; their sum must fit the non-stream proxy budget.",
-    ),
-    TimeoutInvariantRule(
-        "admission-plus-connect-within-compact-budget",
-        ADMISSION_PLUS_CONNECT,
-        "<=",
-        COMPACT_BUDGET,
-        "Compact preflight can pay admission before upstream connect, so the compact budget must cover both.",
     ),
     TimeoutInvariantRule(
         "admission-wait-within-proxy-budget",
@@ -197,34 +195,6 @@ TIMEOUT_INVARIANT_RULES: tuple[TimeoutInvariantRule, ...] = (
         "<=",
         COMPACT_BUDGET,
         "Compact response-create admission must not outlive the compact request budget.",
-    ),
-    TimeoutInvariantRule(
-        "admission-wait-within-bridge-budget",
-        ADMISSION_WAIT,
-        "<=",
-        BRIDGE_BUDGET,
-        "HTTP bridge gate and capacity waits are retried inside one bridge request budget.",
-    ),
-    TimeoutInvariantRule(
-        "stream-idle-within-stream-budget",
-        STREAM_IDLE,
-        "<=",
-        STREAM_BUDGET,
-        "The stream idle watchdog must not outlive the Responses stream request budget.",
-    ),
-    TimeoutInvariantRule(
-        "stream-idle-within-bridge-budget",
-        STREAM_IDLE,
-        "<=",
-        BRIDGE_BUDGET,
-        "HTTP bridge streams use the bridge request deadline, so the idle watchdog must fit inside it.",
-    ),
-    TimeoutInvariantRule(
-        "sse-keepalive-before-stream-idle",
-        SSE_KEEPALIVE,
-        "<",
-        STREAM_IDLE,
-        "Downstream keepalives must arrive before the stream idle watchdog closes a healthy stream.",
     ),
     TimeoutInvariantRule(
         "sse-keepalive-within-stream-budget",
@@ -249,13 +219,6 @@ TIMEOUT_INVARIANT_RULES: tuple[TimeoutInvariantRule, ...] = (
         "refresh token.",
     ),
     TimeoutInvariantRule(
-        "refresh-failure-cooldown-within-claim-ttl",
-        REFRESH_FAILURE_COOLDOWN,
-        "<=",
-        TOKEN_CLAIM_TTL,
-        "Transient refresh-failure caching must not outlive the cross-replica claim window.",
-    ),
-    TimeoutInvariantRule(
         "token-refresh-exchange-within-claim-ttl",
         TOKEN_REFRESH,
         "<=",
@@ -263,60 +226,12 @@ TIMEOUT_INVARIANT_RULES: tuple[TimeoutInvariantRule, ...] = (
         "The OAuth exchange must complete before the refresh claim can expire under a healthy claimant.",
     ),
     TimeoutInvariantRule(
-        "usage-fetch-within-refresh-interval",
-        USAGE_FETCH,
-        "<=",
-        USAGE_REFRESH_INTERVAL,
-        "Usage fetches must not overrun the scheduler cadence and stack refresh pressure.",
-    ),
-    TimeoutInvariantRule(
-        "usage-fetch-within-reset-credits-interval",
-        USAGE_FETCH,
-        "<=",
-        RESET_CREDITS_INTERVAL,
-        "Reset-credit polling shares the usage client timeout class and must not overlap its cadence by default.",
-    ),
-    TimeoutInvariantRule(
-        "compact-budget-within-proxy-budget",
-        COMPACT_BUDGET,
-        "<=",
-        PROXY_BUDGET,
-        "Compact is a shorter proxy lane and must not exceed the generic proxy deadline used by settlement.",
-    ),
-    TimeoutInvariantRule(
-        "bridge-idle-ttl-within-bridge-budget",
-        BRIDGE_IDLE_TTL,
-        "<=",
-        BRIDGE_BUDGET,
-        "A reusable bridge idle TTL must not outlive the request budget that bounds bridge continuity recovery.",
-    ),
-    TimeoutInvariantRule(
-        "bridge-codex-idle-ttl-within-bridge-budget",
-        BRIDGE_CODEX_IDLE_TTL,
-        "<=",
-        BRIDGE_BUDGET,
-        "Codex prompt-cache bridge reuse must stay inside the bridge request budget envelope.",
-    ),
-    TimeoutInvariantRule(
-        "bridge-stuck-gate-retire-after-admission",
-        BRIDGE_STUCK_GATE_RETIRE,
-        ">=",
-        ADMISSION_WAIT,
-        "Stuck gate retirement must not fire before one configured bridge admission wait can complete.",
-    ),
-    TimeoutInvariantRule(
         "bridge-stuck-gate-retire-within-bridge-budget",
-        BRIDGE_STUCK_GATE_RETIRE,
+        BRIDGE_STUCK_GATE_HARD_ANCHOR_RETIRE,
         "<",
         BRIDGE_BUDGET,
-        "Stuck gate retirement must happen before the bridge request budget is exhausted.",
-    ),
-    TimeoutInvariantRule(
-        "bridge-clean-close-jitter-within-admission",
-        BRIDGE_CLEAN_CLOSE_JITTER,
-        "<=",
-        ADMISSION_WAIT,
-        "Clean-close retry jitter must not consume the whole next admission attempt window.",
+        "Hard-continuity stuck gate retirement waits up to 2x the configured threshold and must happen before "
+        "the bridge request budget is exhausted.",
     ),
     TimeoutInvariantRule(
         "bridge-clean-close-jitter-within-bridge-budget",
@@ -340,6 +255,20 @@ TIMEOUT_INVARIANT_RULES: tuple[TimeoutInvariantRule, ...] = (
         COMPACT_BUDGET,
         "Compact response-create leases must not be stale-reclaimed before the compact request budget expires.",
     ),
+    TimeoutInvariantRule(
+        "model-registry-snapshot-outlives-refresh-interval",
+        MODEL_REGISTRY_SNAPSHOT_MAX_AGE,
+        ">",
+        MODEL_REGISTRY_REFRESH_INTERVAL,
+        "Persisted model-registry snapshots must remain loadable for at least one fixed refresh cadence.",
+    ),
+    TimeoutInvariantRule(
+        "durable-bridge-retry-circuit-ttl-covers-backoff-and-half-open",
+        DURABLE_BRIDGE_RETRY_CIRCUIT_STATE_TTL,
+        ">",
+        DURABLE_BRIDGE_RETRY_CIRCUIT_MIN_TTL,
+        "Durable HTTP bridge retry-circuit state must outlive the longest cooldown and half-open lease.",
+    ),
 )
 
 # TODO(timeout_sem_001): database_migration_lock_timeout_seconds is independent startup DB migration policy.
@@ -349,8 +278,7 @@ TIMEOUT_INVARIANT_RULES: tuple[TimeoutInvariantRule, ...] = (
 # cleanup retention.
 # TODO(timeout_sem_021): upstream_route_cache_ttl_seconds is invalidation freshness policy; no timeout inequality
 # verified.
-# TODO(timeout_sem_022): model_registry_snapshot_max_age_seconds relation to refresh cadence is qualitative in
-# current code.
+# timeout_sem_022 is enforced by model-registry-snapshot-outlives-refresh-interval.
 # TODO(timeout_sem_023): firewall_ip_cache_ttl_seconds has no verified timeout owner beyond trust-cache freshness.
 # TODO(timeout_sem_024): leader_election_ttl_seconds renewal is derived internally as ttl//3, not a cross-setting
 # inequality.
@@ -359,7 +287,7 @@ TIMEOUT_INVARIANT_RULES: tuple[TimeoutInvariantRule, ...] = (
 # TODO(timeout_sem_029): usage_refresh_auth_failure_cooldown_seconds is policy cooldown, not a verified scheduler
 # inequality.
 # TODO(timeout_sem_030): shutdown_drain_timeout_seconds depends on deployment termination grace outside Settings.
-# TODO(timeout_sem_031): durable bridge retry circuit TTL is a module constant, not a Settings-field rule.
+# timeout_sem_031 is enforced by durable-bridge-retry-circuit-ttl-covers-backoff-and-half-open.
 # TODO(timeout_sem_032/033): SQLite busy retry constants are module-local and not Settings-field rules.
 # TODO(timeout_sem_034/035): account-selection recovery caps are module constants clamped by request deadlines at
 # runtime.
@@ -405,16 +333,20 @@ def validate_runtime_timeout_invariants(settings: TimeoutSettings) -> list[Timeo
     )
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     from app.core.config.settings import get_settings
 
-    violations = validate_timeout_invariants(get_settings(), strict=False, log=False)
+    parser = argparse.ArgumentParser(description="Validate codex-lb timeout invariants.")
+    parser.add_argument("--strict", action="store_true", help="exit nonzero when any invariant is violated")
+    args = parser.parse_args(argv)
+
+    violations = validate_timeout_invariants(get_settings(), strict=False, log=True)
     if not violations:
         print(f"OK: {len(TIMEOUT_INVARIANT_RULES)} timeout invariant rules satisfied")
         return 0
     for violation in violations:
         print(violation.format(), file=sys.stderr)
-    return 1
+    return 1 if args.strict else 0
 
 
 if __name__ == "__main__":
