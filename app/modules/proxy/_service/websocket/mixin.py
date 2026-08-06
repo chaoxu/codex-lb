@@ -2510,9 +2510,13 @@ class _WebSocketMixin:
             scope_cancelled = True
             raise
         finally:
-            cleanup_timeout = shutdown_state.remaining_drain_timeout_seconds()
-            if cleanup_timeout is None:
-                cleanup_timeout = _facade()._TASK_CANCEL_TIMEOUT_SECONDS
+            def current_cleanup_timeout() -> float:
+                remaining = shutdown_state.remaining_drain_timeout_seconds()
+                return (
+                    _facade()._TASK_CANCEL_TIMEOUT_SECONDS
+                    if remaining is None
+                    else max(float(remaining), 0.0)
+                )
 
             async def finalize_websocket_scope() -> None:
                 nonlocal replay_request_state
@@ -2530,7 +2534,7 @@ class _WebSocketMixin:
                     await _close_websocket_upstream_for_cleanup(
                         proxy,
                         upstream,
-                        timeout_seconds=cleanup_timeout,
+                        timeout_seconds=current_cleanup_timeout(),
                     )
                 if reader_to_await is not None:
                     try:
@@ -2552,7 +2556,7 @@ class _WebSocketMixin:
                     try:
                         await _facade()._await_cancelled_task(
                             retired_create_lease_release_task,
-                            timeout_seconds=cleanup_timeout,
+                            timeout_seconds=current_cleanup_timeout(),
                             label="proxy websocket retired create lease release",
                             cancel=False,
                         )
@@ -2566,7 +2570,7 @@ class _WebSocketMixin:
                     try:
                         await _facade()._await_cancelled_task(
                             request_state_failure_task,
-                            timeout_seconds=cleanup_timeout,
+                            timeout_seconds=current_cleanup_timeout(),
                             label="proxy websocket unsent request finalization",
                             cancel=False,
                         )
@@ -2665,13 +2669,13 @@ class _WebSocketMixin:
             cleanup_task.add_done_callback(log_scope_cleanup_failure)
             done, _ = await asyncio.wait(
                 {cleanup_task},
-                timeout=max(float(cleanup_timeout), 0.0),
+                timeout=current_cleanup_timeout(),
             )
             if not done:
                 _facade().logger.warning(
                     "Websocket scope cleanup exceeded its remaining drain budget "
                     "timeout_seconds=%.3f background_cleanup_tasks=%d",
-                    max(float(cleanup_timeout), 0.0),
+                    current_cleanup_timeout(),
                     sum(1 for task in proxy._background_cleanup_tasks if not task.done()),
                 )
 

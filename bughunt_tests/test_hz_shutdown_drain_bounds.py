@@ -118,7 +118,7 @@ def test_h14_nested_lifespan_cleanup_uses_remaining_drain_budget() -> None:
     reserve = core_server.POST_DRAIN_CLEANUP_TIMEOUT_SECONDS
     assert reserve == 25.0
     source = inspect.getsource(__import__("app.main", fromlist=["lifespan"]).lifespan)
-    assert "timeout_seconds=shutdown_state.remaining_drain_timeout_seconds() or 0.0" in source
+    assert "shutdown_state.remaining_post_drain_cleanup_timeout_seconds() or 0.0" in source
     nested_full_timeout = (
         "drain_persistence_tasks(\n                    "
         "timeout_seconds=settings.shutdown_drain_timeout_seconds"
