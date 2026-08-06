@@ -24122,6 +24122,9 @@ async def test_http_bridge_retirement_rechecks_response_events_after_retry_suspe
         pending_requests=deque([request_state]),
         queued_request_count=1,
     )
+    session.closed = True
+    session.upstream_control.reconnect_requested = True
+    session.upstream_control.retire_after_drain = True
     service._http_bridge_sessions[session.key] = session
     close = AsyncMock()
     monkeypatch.setattr(service, "_close_http_bridge_session_bounded", close)
@@ -24142,6 +24145,8 @@ async def test_http_bridge_retirement_rechecks_response_events_after_retry_suspe
     )
 
     assert session.closed is False
+    assert session.upstream_control.reconnect_requested is False
+    assert session.upstream_control.retire_after_drain is False
     assert service._http_bridge_sessions[session.key] is session
     close.assert_not_awaited()
 
