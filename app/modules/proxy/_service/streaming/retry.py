@@ -57,6 +57,7 @@ from app.modules.proxy._service.websocket.helpers import (
     _websocket_input_items_are_self_contained_fresh_replay,
 )
 from app.modules.proxy.affinity import (
+    _AffinityPolicy,
     _is_synthesized_turn_state,
     _owner_lookup_session_id_from_headers,
     _prompt_cache_key_from_request_model,
@@ -922,6 +923,8 @@ class _StreamingRetryMixin:
             )
             require_preferred_account = require_preferred_account or turn_state_owner_account_id is not None
             file_required_preferred_account = rewritten_file_account_id is not None
+            if preferred_account_id is not None and affinity.kind == StickySessionKind.CODEX_SESSION:
+                affinity = _AffinityPolicy(require_unambiguous_account=affinity.require_unambiguous_account)
             for attempt in range(max_attempts):
                 remaining_budget = _facade()._remaining_budget_seconds(deadline)
                 if remaining_budget <= 0:

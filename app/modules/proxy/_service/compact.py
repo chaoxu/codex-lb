@@ -548,12 +548,11 @@ class _CompactMixin:
                 if owner_account_id == resolved_owner and session_identity is not None
             }
             if len(session_identities) > 1:
-                sources = ", ".join(source for source, _account_id, _session_id in owner_refs)
                 raise ProxyResponseError(
                     502,
                     openai_error(
                         "continuity_owner_conflict",
-                        f"Account-owned continuity sources conflict ({sources}); retry the logical turn.",
+                        "Turn-state owner sessions conflict; retry the logical turn.",
                         error_type="server_error",
                     ),
                 )
@@ -828,6 +827,7 @@ class _CompactMixin:
                 http_status=failed_status,
             )
 
+        selection_affinity = affinity
         try:
 
             async def _call_compact(
@@ -988,7 +988,7 @@ class _CompactMixin:
                     request_id=request_id,
                     kind="compact",
                     api_key=api_key,
-                    affinity_policy=affinity,
+                    affinity_policy=selection_affinity,
                     prefer_earlier_reset_accounts=prefer_earlier_reset,
                     prefer_earlier_reset_window=_prefer_earlier_reset_window(settings),
                     routing_strategy=routing_strategy,
@@ -1019,7 +1019,7 @@ class _CompactMixin:
                             request_id=request_id,
                             kind="compact",
                             api_key=api_key,
-                            affinity_policy=affinity,
+                            affinity_policy=selection_affinity,
                             prefer_earlier_reset_accounts=prefer_earlier_reset,
                             prefer_earlier_reset_window=_prefer_earlier_reset_window(settings),
                             routing_strategy=routing_strategy,

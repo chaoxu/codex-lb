@@ -141,9 +141,7 @@ class LiveUsageIngestor:
                 )
 
     async def _ingest(self, item: _QueuedSnapshot) -> None:
-        account_id = item.account_id
-        if account_id is None:
-            account_id = await self._resolve_account_id(item.chatgpt_account_id)
+        account_id = await self._resolve_persisted_account_id(item.account_id, item.chatgpt_account_id)
         if account_id is None:
             return
         if self._should_skip(account_id, item.snapshot):
@@ -235,6 +233,35 @@ class LiveUsageIngestor:
         # the poller invalidates otherwise; drop it so clients see the live
         # values before the TTL expires.
         await get_rate_limit_headers_cache().invalidate()
+
+    async def _resolve_persisted_account_id(
+        self,
+        account_id: str | None,
+        chatgpt_account_id: str | None,
+    ) -> str | None:
+        if account_id is not None:
+            resolved = await self._resolve_account_id_by_id(account_id)
+            if resolved is not None:
+                return resolved
+            resolved = await self._resolve_account_id(account_id)
+            if resolved is not None:
+                return resolved
+        return await self._resolve_account_id(chatgpt_account_id)
+
+    async def _resolve_account_id_by_id(self, account_id: str | None) -> str | None:
+        if not account_id:
+            return None
+        cache_key = f"id:{account_id}"
+        cached = self._resolution_cache.get(cache_key)
+        now = time.monotonic()
+        if cached is not None and now - cached[1] < _RESOLUTION_TTL_SECONDS:
+            return cached[0]
+        async with get_background_session() as session:
+            resolved = await session.scalar(select(Account.id).where(Account.id == account_id))
+        if not isinstance(resolved, str):
+            resolved = None
+        self._resolution_cache[cache_key] = (resolved, now)
+        return resolved
 
     async def _resolve_account_id(self, chatgpt_account_id: str | None) -> str | None:
         if not chatgpt_account_id:
