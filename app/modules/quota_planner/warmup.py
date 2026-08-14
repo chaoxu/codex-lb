@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import usage as usage_core
 from app.core.clients.proxy import stream_responses
+from app.core.config.settings import get_settings
 from app.core.crypto import TokenEncryptor
 from app.core.openai.parsing import parse_sse_event
 from app.core.openai.requests import ResponsesRequest
@@ -30,7 +31,11 @@ from app.modules.usage.repository import UsageRepository
 from app.modules.usage.updater import UsageUpdater
 
 from .logic import SHORT_WINDOW_MAX_MINUTES, PlannerSettings
-from .repository import QuotaPlannerRepository, warmup_claim_is_expired
+from .repository import (
+    WARMUP_EXECUTION_CLAIM_TTL_SECONDS,
+    QuotaPlannerRepository,
+    warmup_claim_is_expired,
+)
 
 WARMUP_REQUEST_KIND = "warmup"
 # Rows written by the same upstream fetch land within milliseconds of each
@@ -41,6 +46,16 @@ WARMUP_DEFAULT_INPUT_BUDGET = 32
 WARMUP_DEFAULT_OUTPUT_BUDGET = 8
 
 logger = logging.getLogger(__name__)
+
+
+def _warmup_request_id(decision_id: str) -> str:
+    return f"quota-warmup-{decision_id}"
+
+
+def _warmup_claim_ttl_seconds() -> float:
+    settings = get_settings()
+    budget_seconds = float(getattr(settings, "http_responses_stream_request_budget_seconds", 0.0) or 0.0)
+    return max(WARMUP_EXECUTION_CLAIM_TTL_SECONDS, budget_seconds)
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +162,7 @@ class QuotaWarmupService:
             since=_local_midnight(),
             max_warmups=settings.max_warmups_per_day,
             max_credits=settings.max_warmup_credits_per_day,
+            claim_ttl_seconds=_warmup_claim_ttl_seconds(),
         )
         if claimed is None:
             return await self._resolve_refused_claim(decision_id=decision.id, settings=settings)
@@ -154,6 +170,16 @@ class QuotaWarmupService:
         claim_lease_expires_at = claimed.lease_expires_at
         assert claim_executed_at is not None
         assert claim_lease_expires_at is not None
+
+        request_id = _warmup_request_id(decision.id)
+        replay_result = await self._reconcile_existing_warmup_request(
+            decision_id=decision.id,
+            request_id=request_id,
+            claim_executed_at=claim_executed_at,
+            claim_lease_expires_at=claim_lease_expires_at,
+        )
+        if replay_result is not None:
+            return replay_result
 
         reservation_id: str | None = None
         if api_key_id is not None:
@@ -217,7 +243,6 @@ class QuotaWarmupService:
                     fallback_reason=reason,
                 )
 
-        request_id = f"quota-warmup-{uuid4().hex}"
         started = time.monotonic()
         try:
             usage = await self._send_warmup_probe(
@@ -411,6 +436,36 @@ class QuotaWarmupService:
             request_id=request_id,
             executed_at=row.executed_at,
         )
+
+    async def _reconcile_existing_warmup_request(
+        self,
+        *,
+        decision_id: str,
+        request_id: str,
+        claim_executed_at: datetime,
+        claim_lease_expires_at: datetime,
+    ) -> WarmupExecutionResult | None:
+        existing = await self._request_logs.latest_log_for_request_id(request_id)
+        if existing is None or existing.request_kind != WARMUP_REQUEST_KIND:
+            return None
+        if existing.status == "success":
+            row = await self._planner.update_decision_status(
+                decision_id,
+                status="executed",
+                reason="warmup_executed",
+                executed_at=existing.requested_at,
+                expected_status="executing",
+                expected_executed_at=claim_executed_at,
+                expected_lease_expires_at=claim_lease_expires_at,
+            )
+            return await self._result_from_update_or_current(
+                decision_id=decision_id,
+                row=row,
+                fallback_status="executed",
+                fallback_reason="warmup_executed",
+                request_id=request_id,
+            )
+        return None
 
     async def cancel_decision(self, decision_id: str) -> WarmupExecutionResult | None:
         row = await self._planner.get_decision(decision_id)

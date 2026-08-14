@@ -351,6 +351,21 @@ class QuotaPlannerRepository:
             return None
         return await self._session.get(QuotaPlannerDecision, claimed_id, populate_existing=True)
 
+    async def list_expired_warmup_claims(self, *, limit: int = 100) -> list[QuotaPlannerDecision]:
+        dialect_name = self._dialect_name()
+        stmt = (
+            select(QuotaPlannerDecision)
+            .where(
+                QuotaPlannerDecision.action == "warmup",
+                QuotaPlannerDecision.status == "executing",
+                _expired_warmup_claim_clause(dialect_name=dialect_name),
+            )
+            .order_by(QuotaPlannerDecision.lease_expires_at.asc(), QuotaPlannerDecision.created_at.asc())
+            .limit(limit)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
     async def update_decision_status(
         self,
         decision_id: str,

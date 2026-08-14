@@ -1120,6 +1120,15 @@ class RequestLogsRepository:
                 await _safe_rollback(self._session)
                 raise
 
+    async def latest_log_for_request_id(self, request_id: str) -> RequestLog | None:
+        stmt = (
+            select(RequestLog)
+            .where(RequestLog.request_id == ensure_request_id(request_id))
+            .order_by(RequestLog.requested_at.desc(), RequestLog.id.desc())
+            .limit(1)
+        )
+        return await self._session.scalar(stmt)
+
     async def update_model_for_request(self, request_id: str, model: str) -> int:
         """Override the ``model`` field of any logs matching ``request_id``.
 
