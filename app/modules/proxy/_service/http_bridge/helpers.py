@@ -2646,11 +2646,15 @@ def _http_bridge_eventless_max_keepalive_count(
     """
 
     interval_seconds = max(0.001, keepalive_interval_seconds)
+    minimum_count = max(1, floor_count)
     budget_seconds = _http_bridge_eventless_budget_seconds(
         settings,
-        fallback_seconds=interval_seconds * max(1, floor_count),
+        fallback_seconds=interval_seconds * minimum_count,
     )
-    return max(max(1, floor_count), math.ceil(budget_seconds / interval_seconds))
+    derived_count = max(1, math.ceil(budget_seconds / interval_seconds))
+    if minimum_count * interval_seconds <= budget_seconds:
+        return max(minimum_count, derived_count)
+    return derived_count
 
 
 def _http_bridge_admission_timeout_seconds(

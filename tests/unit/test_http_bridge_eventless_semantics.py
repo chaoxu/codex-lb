@@ -121,7 +121,7 @@ def test_http_bridge_eventless_budget_is_named_and_settings_derived() -> None:
             keepalive_interval_seconds=10.0,
             floor_count=6,
         )
-        == 6
+        == 5
     )
 
 
