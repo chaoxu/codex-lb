@@ -1504,6 +1504,16 @@ class _HTTPBridgeMixin(
                     "deferred_account_backoff_lifecycle": deferred_account_backoff_lifecycle,
                     "defer_account_health_writes": defer_account_health_writes,
                 }
+                if (
+                    existing is None
+                    and durable_lookup is not None
+                    and durable_lookup.owner_instance_id == settings.http_responses_session_bridge_instance_id
+                ):
+                    # Recreating a local session against an existing durable row
+                    # must fence any late close/release from the prior local
+                    # owner. Advancing the owner epoch makes that teardown miss
+                    # its fenced UPDATE instead of blanking the new claimant.
+                    force_durable_takeover = True
                 try:
                     create_signature = inspect.signature(create_session)
                 except (TypeError, ValueError):
