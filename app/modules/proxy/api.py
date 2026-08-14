@@ -6441,8 +6441,8 @@ async def _stream_response_error_events(
             except Exception:
                 logger.warning("Failed to release stream reservation after upstream proxy error", exc_info=True)
         response_id = None
-        if isinstance(exc.payload, Mapping):
-            response_id = _response_id_from_event_payload(exc.payload)
+        if isinstance(exc.payload, dict):
+            response_id = _response_id_from_event_payload(cast(dict[str, JsonValue], exc.payload))
         if response_id is None:
             response_id = f"resp_{uuid4().hex}"
         envelope = _parse_error_envelope(exc.payload)
