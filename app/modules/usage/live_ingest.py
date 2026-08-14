@@ -251,16 +251,18 @@ class LiveUsageIngestor:
     ) -> str | None:
         if account_id is not None:
             exact = await self._resolve_account_id_by_id(account_id)
-            if chatgpt_account_id:
-                resolved = await self._resolve_account_id(chatgpt_account_id)
-                if resolved is not None:
-                    if exact is not None and exact != resolved:
-                        return None
-                    return resolved
             if exact is not None:
+                if chatgpt_account_id:
+                    resolved = await self._resolve_account_id(chatgpt_account_id)
+                    if resolved is not None and exact != resolved:
+                        return None
                 return exact
             resolved = await self._resolve_account_id(account_id)
             if resolved is not None:
+                if chatgpt_account_id and chatgpt_account_id != account_id:
+                    chatgpt_resolved = await self._resolve_account_id(chatgpt_account_id)
+                    if chatgpt_resolved is not None and chatgpt_resolved != resolved:
+                        return None
                 return resolved
         return await self._resolve_account_id(chatgpt_account_id)
 
@@ -271,7 +273,12 @@ class LiveUsageIngestor:
         cached = self._resolution_cache.get(cache_key)
         now = time.monotonic()
         if cached is not None and now - cached[1] < _RESOLUTION_TTL_SECONDS:
-            return cached[0]
+            cached_account_id = cached[0]
+            if cached_account_id is None:
+                return None
+            if await self._account_id_exists(cached_account_id):
+                return cached_account_id
+            self._resolution_cache.pop(cache_key, None)
         async with get_background_session() as session:
             resolved = await session.scalar(select(Account.id).where(Account.id == account_id))
         if not isinstance(resolved, str):
@@ -279,14 +286,14 @@ class LiveUsageIngestor:
         self._resolution_cache[cache_key] = (resolved, now)
         return resolved
 
+    async def _resolve_account_id_by_account_id(self, account_id: str) -> str | None:
+        return await self._resolve_account_id_by_id(account_id)
+
     async def _resolve_account_id(self, chatgpt_account_id: str | None) -> str | None:
         if not chatgpt_account_id:
             return None
         cache_key = f"chatgpt:{chatgpt_account_id}"
-        cached = self._resolution_cache.get(cache_key)
         now = time.monotonic()
-        if cached is not None and now - cached[1] < _RESOLUTION_TTL_SECONDS:
-            return cached[0]
         async with get_background_session() as session:
             rows = (
                 (await session.execute(select(Account.id).where(Account.chatgpt_account_id == chatgpt_account_id)))
@@ -298,6 +305,11 @@ class LiveUsageIngestor:
         resolved = rows[0] if len(rows) == 1 else None
         self._resolution_cache[cache_key] = (resolved, now)
         return resolved
+
+    async def _account_id_exists(self, account_id: str) -> bool:
+        async with get_background_session() as session:
+            resolved = await session.scalar(select(Account.id).where(Account.id == account_id))
+        return isinstance(resolved, str)
 
 
 _ingestor: LiveUsageIngestor | None = None

@@ -216,7 +216,7 @@ async def test_ingestor_resolves_upstream_account_id_before_history_write(
     assert await ingestor._resolve_persisted_account_id(None, "chatgpt-raw") == "acc-internal"
     assert await ingestor._resolve_persisted_account_id("missing", "missing-too") is None
     assert by_id_calls == ["acc-internal", "chatgpt-raw", "missing"]
-    assert by_chatgpt_calls == ["chatgpt-raw", "chatgpt-raw", "missing", "missing-too"]
+    assert by_chatgpt_calls == ["unused", "chatgpt-raw", "chatgpt-raw", "missing", "missing-too"]
 
 
 @pytest.mark.asyncio
