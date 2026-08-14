@@ -2113,6 +2113,7 @@ Index(
     postgresql_include=["used_percent", "reset_at", "window_minutes", "id"],
 )
 Index("idx_accounts_email", Account.email)
+Index("idx_accounts_chatgpt_account_id", Account.chatgpt_account_id)
 Index("idx_api_keys_name", ApiKey.name)
 Index("idx_logs_account_time", RequestLog.account_id, RequestLog.requested_at)
 Index("idx_logs_model_source_time", RequestLog.model_source_id, RequestLog.requested_at)

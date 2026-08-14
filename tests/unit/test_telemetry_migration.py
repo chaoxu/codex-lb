@@ -16,6 +16,7 @@ async def test_telemetry_migration_upgrade_defaults_and_downgrade(tmp_path) -> N
     db_url = f"sqlite+aiosqlite:///{tmp_path / 'telemetry.sqlite'}"
     parent = "20260803_000000_merge_http_bridge_recovery_and_capability_lineage_heads"
     revision = "20260806_000000_add_anonymous_telemetry"
+    head_revision = "20260814_000000_add_accounts_chatgpt_identity_index"
     telemetry_columns = {
         "telemetry_consent",
         "telemetry_instance_id",
@@ -54,7 +55,7 @@ async def test_telemetry_migration_upgrade_defaults_and_downgrade(tmp_path) -> N
         assert not telemetry_columns & columns
 
         result = await to_thread.run_sync(lambda: run_upgrade(db_url, "head", bootstrap_legacy=False))
-        assert result.current_revision == revision
+        assert result.current_revision == head_revision
         columns, _ = await columns_and_rows(engine)
         assert telemetry_columns <= columns
     finally:
