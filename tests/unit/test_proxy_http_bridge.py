@@ -5679,6 +5679,14 @@ async def test_http_bridge_idle_recovery_transport_failure_yields_terminal_event
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = proxy_service.ProxyService(cast(Any, nullcontext()))
+    service._durable_bridge = cast(
+        Any,
+        SimpleNamespace(
+            lookup_retry_circuit=AsyncMock(return_value=None),
+            persist_retry_circuit=AsyncMock(return_value=None),
+            clear_retry_circuit=AsyncMock(return_value=None),
+        ),
+    )
     detach = AsyncMock()
     monkeypatch.setattr(service, "_detach_http_bridge_request", detach)
     monkeypatch.setattr(
@@ -5688,6 +5696,7 @@ async def test_http_bridge_idle_recovery_transport_failure_yields_terminal_event
             http_responses_stream_request_budget_seconds=60.0,
             sse_keepalive_interval_seconds=0.001,
             stream_idle_timeout_seconds=0.001,
+            http_responses_session_bridge_anchor_poison_failure_threshold=7,
         ),
     )
     monkeypatch.setattr(proxy_service, "_HTTP_BRIDGE_STARTUP_KEEPALIVE_GRACE_SECONDS", 0.001)
@@ -5744,8 +5753,8 @@ async def test_http_bridge_idle_recovery_transport_failure_yields_terminal_event
     assert isinstance(response, dict)
     error = response["error"]
     assert isinstance(error, dict)
-    assert error["code"] == "proxy_network_unavailable"
-    assert error["message"] == "Codex upstream websocket send failed: OSError"
+    assert error["code"] == "bridge_eventless_timeout"
+    assert error["message"] == http_bridge_helpers_module._HTTP_BRIDGE_EVENTLESS_TIMEOUT_MESSAGE
     retry_precreated.assert_awaited_once_with(session, restart_reader=True)
     detach.assert_awaited_once_with(session, request_state=request_state)
 

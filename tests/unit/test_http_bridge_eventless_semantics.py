@@ -74,6 +74,7 @@ def _eventless_settings(
         stream_idle_timeout_seconds=stream_idle_timeout_seconds,
         http_responses_session_bridge_stuck_gate_retire_after_seconds=stuck_gate_retire_after_seconds,
         http_responses_session_bridge_request_budget_seconds=60.0,
+        http_responses_session_bridge_anchor_poison_failure_threshold=7,
     )
 
 

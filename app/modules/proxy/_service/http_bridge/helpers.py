@@ -2650,7 +2650,7 @@ def _http_bridge_eventless_max_keepalive_count(
         settings,
         fallback_seconds=interval_seconds * max(1, floor_count),
     )
-    return max(1, math.ceil(budget_seconds / interval_seconds))
+    return max(max(1, floor_count), math.ceil(budget_seconds / interval_seconds))
 
 
 def _http_bridge_admission_timeout_seconds(
