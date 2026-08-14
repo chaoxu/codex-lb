@@ -5796,7 +5796,7 @@ def _create_first_stream_probe_task(
 
 
 async def _wait_for_first_stream_probe(
-    first_task: asyncio.Task[str],
+    first_task: asyncio.Task[str | None],
     *,
     timeout_seconds: float,
     capacity_wait_event: asyncio.Event | None,

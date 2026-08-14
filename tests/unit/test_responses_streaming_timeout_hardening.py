@@ -138,6 +138,8 @@ async def test_capacity_ready_probe_timeout_uses_virtual_scheduler() -> None:
     await scheduler.drain()
     assert probe_task.done() is False
     await scheduler.advance(0.05)
+    assert probe_task.done() is False
+    await scheduler.advance(0.05)
 
     assert await probe_task is False
     await scheduler.cancel_owned_tasks()

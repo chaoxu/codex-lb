@@ -1311,13 +1311,20 @@ async def test_codex_realtime_call_failure_logs_redact_account_identifiers(
         fake_fresh_with_failover,
     )
     if failure_branch == "before-upstream":
-        remaining = iter((1.0, 0.0))
-        monkeypatch.setattr(proxy_module, "_remaining_budget_seconds", lambda _deadline: next(remaining))
+        monkeypatch.setattr(proxy_module, "_remaining_budget_seconds", lambda _deadline: 0.0)
     elif failure_branch == "before-forced-refresh":
-        remaining = iter((1.0, 1.0, 0.0))
-        monkeypatch.setattr(proxy_module, "_remaining_budget_seconds", lambda _deadline: next(remaining))
+        remaining = iter((1.0, 0.0))
+        monkeypatch.setattr(
+            proxy_module,
+            "_remaining_budget_seconds",
+            lambda _deadline: next(remaining),
+        )
     else:
-        monkeypatch.setattr(proxy_module, "_remaining_budget_seconds", lambda _deadline: 1.0)
+        monkeypatch.setattr(
+            proxy_module,
+            "_remaining_budget_seconds",
+            lambda _deadline: 1.0,
+        )
 
     caplog.clear()
     with caplog.at_level(logging.WARNING):
@@ -1362,7 +1369,7 @@ async def test_codex_realtime_call_failure_logs_redact_account_identifiers(
 
 
 @pytest.mark.asyncio
-async def test_codex_realtime_call_shared_freshness_budget_log_redacts_account_id(
+async def test_codex_realtime_call_shared_budget_log_redacts_account_id(
     async_client,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -1380,9 +1387,12 @@ async def test_codex_realtime_call_shared_freshness_budget_log_redacts_account_i
     async def unexpected_codex_control_request(*_args, **_kwargs):
         raise AssertionError("freshness budget exhaustion must prevent the upstream call")
 
-    remaining_budget = iter((1.0, 0.0))
     monkeypatch.setattr(proxy_module, "core_codex_control_request", unexpected_codex_control_request)
-    monkeypatch.setattr(proxy_module, "_remaining_budget_seconds", lambda _deadline: next(remaining_budget))
+    monkeypatch.setattr(
+        proxy_module.ProxyService,
+        "_remaining_budget_seconds",
+        lambda _self, _deadline: 0.0,
+    )
 
     caplog.clear()
     with caplog.at_level(logging.WARNING):
@@ -1401,10 +1411,10 @@ async def test_codex_realtime_call_shared_freshness_budget_log_redacts_account_i
         record
         for record in caplog.records
         if record.name == "app.modules.proxy.service"
-        and "request budget exhausted before freshness check" in record.getMessage()
+        and "request budget exhausted before account selection" in record.getMessage()
     ]
     assert len(matching_records) == 1
-    assert "account_id=<redacted>" in matching_records[0].getMessage()
+    assert "account_id=" not in matching_records[0].getMessage()
     assert account_id not in matching_records[0].getMessage()
     assert matching_records[0].exc_info is None
 
