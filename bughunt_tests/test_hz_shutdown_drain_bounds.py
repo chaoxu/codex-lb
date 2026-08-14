@@ -104,9 +104,7 @@ def test_h13_inflight_middleware_admission_gate_paths() -> None:
 
     assert "/internal/bridge/responses" in inflight._DRAIN_ALLOWED_HTTP_PATHS
     assert "/internal/bridge/responses" not in inflight._IN_FLIGHT_EXCLUDED_HTTP_PATHS
-    assert inflight._IN_FLIGHT_WEBSOCKET_PATHS == frozenset(
-        {"/backend-api/codex/responses", "/v1/responses"}
-    )
+    assert inflight._IN_FLIGHT_WEBSOCKET_PATHS == frozenset({"/backend-api/codex/responses", "/v1/responses"})
 
 
 # ---------------------------------------------------------------- hazard_14
@@ -120,8 +118,7 @@ def test_h14_nested_lifespan_cleanup_uses_remaining_drain_budget() -> None:
     source = inspect.getsource(__import__("app.main", fromlist=["lifespan"]).lifespan)
     assert "shutdown_state.remaining_post_drain_cleanup_timeout_seconds() or 0.0" in source
     nested_full_timeout = (
-        "drain_persistence_tasks(\n                    "
-        "timeout_seconds=settings.shutdown_drain_timeout_seconds"
+        "drain_persistence_tasks(\n                    timeout_seconds=settings.shutdown_drain_timeout_seconds"
     )
     assert nested_full_timeout not in source
 

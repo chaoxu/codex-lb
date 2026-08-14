@@ -2510,13 +2510,10 @@ class _WebSocketMixin:
             scope_cancelled = True
             raise
         finally:
+
             def current_cleanup_timeout() -> float:
                 remaining = shutdown_state.remaining_drain_timeout_seconds()
-                return (
-                    _facade()._TASK_CANCEL_TIMEOUT_SECONDS
-                    if remaining is None
-                    else max(float(remaining), 0.0)
-                )
+                return _facade()._TASK_CANCEL_TIMEOUT_SECONDS if remaining is None else max(float(remaining), 0.0)
 
             async def finalize_websocket_scope() -> None:
                 nonlocal replay_request_state
