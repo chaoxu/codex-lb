@@ -1623,6 +1623,7 @@ class _HTTPBridgeUpstreamEventsMixin:
             pending_request_count = len(session.pending_requests)
 
             if matched_request_state is not None:
+                session.last_upstream_event_generation += 1
                 now = _service_time().monotonic()
                 if matched_request_state.latency_first_upstream_event_ms is None:
                     matched_request_state.latency_first_upstream_event_ms = int(

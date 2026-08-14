@@ -24135,6 +24135,7 @@ async def test_http_bridge_retirement_rechecks_response_events_after_retry_suspe
         await asyncio.sleep(0)
         async with session.pending_lock:
             request_state.response_event_count = 1
+            session.last_upstream_event_generation += 1
 
     monkeypatch.setattr(service, "_record_http_bridge_retry_circuit_failure", record_failure_during_await)
 
@@ -24143,6 +24144,81 @@ async def test_http_bridge_retirement_rechecks_response_events_after_retry_suspe
         detail="stream_incomplete",
         response_events_seen=0,
     )
+
+    assert session.closed is False
+    assert session.upstream_control.reconnect_requested is False
+    assert session.upstream_control.retire_after_drain is False
+    assert service._http_bridge_sessions[session.key] is session
+    close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_http_bridge_retirement_ignores_stale_completed_response_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = proxy_service.ProxyService(cast(Any, nullcontext()))
+    session = _make_bridge_session(key_value="bridge-retire-stale-completed-id")
+    session.last_completed_response_id = "resp-old"
+    service._http_bridge_sessions[session.key] = session
+    close = AsyncMock()
+    monkeypatch.setattr(service, "_close_http_bridge_session_bounded", close)
+    monkeypatch.setattr(service, "_record_http_bridge_retry_circuit_failure", AsyncMock())
+
+    await service._retire_stale_pending_http_bridge_session(
+        session,
+        detail="stream_incomplete",
+        response_events_seen=0,
+    )
+
+    assert session.closed is True
+    assert service._http_bridge_sessions.get(session.key) is None
+    close.assert_awaited_once_with(session, reason="retire_stale_pending")
+
+
+@pytest.mark.asyncio
+async def test_http_bridge_retirement_rechecks_events_after_pending_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = proxy_service.ProxyService(cast(Any, nullcontext()))
+    request_state = proxy_service._WebSocketRequestState(
+        request_id="req-event-after-pending-snapshot",
+        model="gpt-5.6-sol",
+        service_tier=None,
+        reasoning_effort=None,
+        api_key_reservation=None,
+        started_at=time.monotonic(),
+        transport="http",
+    )
+    session = _make_bridge_session(
+        key_value="bridge-retire-post-snapshot-liveness",
+        pending_requests=deque([request_state]),
+        queued_request_count=1,
+    )
+    session.closed = True
+    session.upstream_control.reconnect_requested = True
+    session.upstream_control.retire_after_drain = True
+    service._http_bridge_sessions[session.key] = session
+    close = AsyncMock()
+    monkeypatch.setattr(service, "_close_http_bridge_session_bounded", close)
+    monkeypatch.setattr(service, "_record_http_bridge_retry_circuit_failure", AsyncMock())
+
+    await service._http_bridge_lock.acquire()
+    try:
+        retire_task = asyncio.create_task(
+            service._retire_stale_pending_http_bridge_session(
+                session,
+                detail="stream_incomplete",
+                response_events_seen=0,
+            )
+        )
+        await asyncio.sleep(0)
+        async with session.pending_lock:
+            request_state.response_event_count = 1
+            session.last_upstream_event_generation += 1
+    finally:
+        service._http_bridge_lock.release()
+
+    await retire_task
 
     assert session.closed is False
     assert session.upstream_control.reconnect_requested is False
