@@ -6024,11 +6024,18 @@ class _WebSocketMixin:
         if penalize_account:
             for request_state in remaining:
                 request_error_code = request_state.error_code_override or error_code
+                request_error_message = request_state.error_message_override or error_message
+                if (
+                    request_error_code == "stream_incomplete"
+                    and request_state.previous_response_id is not None
+                    and request_error_message in STREAM_INCOMPLETE_ANCHOR_NEUTRAL_MESSAGES
+                ):
+                    continue
                 if request_error_code in _facade()._TRANSIENT_RETRY_CODES or _facade()._should_penalize_stream_error(
                     request_error_code
                 ):
                     penalty_code = request_error_code
-                    penalty_message = request_state.error_message_override or error_message
+                    penalty_message = request_error_message
                     break
 
         reservation_release_succeeded = True
