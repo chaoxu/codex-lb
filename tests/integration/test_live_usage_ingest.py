@@ -5,6 +5,7 @@ import asyncio
 import pytest
 from sqlalchemy import delete, update
 
+import app.core.clients.proxy as proxy_client_module
 from app.core.crypto import TokenEncryptor
 from app.core.usage import live_hub
 from app.core.usage.live_snapshots import LiveRateLimitSnapshot, LiveUsageWindow
@@ -280,6 +281,72 @@ async def test_live_ingestor_resolves_workspace_suffixed_account_id(db_setup) ->
         live_hub.register_live_usage_publisher(None)
         await ingestor.stop()
 
+    assert primary is not None
+    assert primary.account_id == stored_account_id
+    assert secondary is not None
+
+
+@pytest.mark.asyncio
+async def test_live_usage_stream_tap_persists_workspace_suffixed_account_id(
+    db_setup,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del db_setup
+    stored_account_id = "acc_live_stream_workspace"
+    chatgpt_account_id = "workspace-live-stream"
+    raw_account_id = f"{stored_account_id}_49115a1d"
+    async with SessionLocal() as session:
+        await AccountsRepository(session).upsert(
+            _make_account(
+                stored_account_id,
+                "live-stream-workspace@example.com",
+                chatgpt_account_id=chatgpt_account_id,
+            )
+        )
+
+    blocks = [
+        'data: {"type":"response.created","response":{"id":"resp_live_stream"}}\n\n',
+        'data: {"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":55,"window_minutes":300,"reset_at":1700000300},"secondary":{"used_percent":12,"window_minutes":10080,"reset_at":1700600000}}}\n\n',
+        'data: {"type":"response.completed","response":{"id":"resp_live_stream"}}\n\n',
+    ]
+
+    async def fake_stream(**kwargs):
+        del kwargs
+        for block in blocks:
+            yield block
+
+    import contextlib
+
+    @contextlib.asynccontextmanager
+    async def fake_lease(session=None):
+        yield session
+
+    monkeypatch.setattr(proxy_client_module, "_stream_responses_with_session", lambda **kwargs: fake_stream(**kwargs))
+    monkeypatch.setattr(proxy_client_module, "lease_http_session", fake_lease)
+
+    ingestor = live_ingest.LiveUsageIngestor(queue_size=8, write_min_interval_seconds=0.0)
+    ingestor.start()
+    try:
+        live_hub.register_live_usage_publisher(ingestor.publish)
+        request = proxy_client_module.ResponsesRequest.model_validate(
+            {"model": "gpt-5.1", "instructions": "hi", "input": "live", "stream": True}
+        )
+        seen = [
+            block
+            async for block in proxy_client_module.stream_responses(
+                request,
+                {},
+                "access-token",
+                chatgpt_account_id,
+                codex_lb_account_id=raw_account_id,
+            )
+        ]
+        primary, secondary = await _wait_for_rows(stored_account_id)
+    finally:
+        live_hub.register_live_usage_publisher(None)
+        await ingestor.stop()
+
+    assert seen == blocks
     assert primary is not None
     assert primary.account_id == stored_account_id
     assert secondary is not None

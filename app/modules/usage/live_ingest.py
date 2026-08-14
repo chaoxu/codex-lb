@@ -68,7 +68,7 @@ class LiveUsageIngestor:
         self._queue: asyncio.Queue[_QueuedSnapshot] = asyncio.Queue(maxsize=max(1, queue_size))
         self._write_min_interval_seconds = write_min_interval_seconds
         self._last_write: dict[str, tuple[tuple[object, ...], float]] = {}
-        self._resolution_cache: dict[str, tuple[str, float]] = {}
+        self._resolution_cache: dict[str, tuple[str | None, float]] = {}
         self._resolution_aliases: dict[str, tuple[str, str | None]] = {}
         self._consumer: asyncio.Task[None] | None = None
         self._dropped = 0
