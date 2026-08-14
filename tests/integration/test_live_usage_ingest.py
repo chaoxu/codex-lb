@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from sqlalchemy import delete, update
@@ -306,7 +307,18 @@ async def test_live_usage_stream_tap_persists_workspace_suffixed_account_id(
 
     blocks = [
         'data: {"type":"response.created","response":{"id":"resp_live_stream"}}\n\n',
-        'data: {"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":55,"window_minutes":300,"reset_at":1700000300},"secondary":{"used_percent":12,"window_minutes":10080,"reset_at":1700600000}}}\n\n',
+        "data: "
+        + json.dumps(
+            {
+                "type": "codex.rate_limits",
+                "rate_limits": {
+                    "primary": {"used_percent": 55, "window_minutes": 300, "reset_at": 1700000300},
+                    "secondary": {"used_percent": 12, "window_minutes": 10080, "reset_at": 1700600000},
+                },
+            },
+            separators=(",", ":"),
+        )
+        + "\n\n",
         'data: {"type":"response.completed","response":{"id":"resp_live_stream"}}\n\n',
     ]
 
