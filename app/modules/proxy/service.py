@@ -945,11 +945,7 @@ class ProxyService(
         self._http_bridge_operation_event_batcher = HttpBridgeOperationEventBatcher.from_settings(self._durable_bridge)
         self._http_bridge_owner_client = HTTPBridgeOwnerClient()
         self._http_bridge_sessions: dict[_HTTPBridgeSessionKey, _HTTPBridgeSession] = {}
-        _initialize_http_bridge_retry_circuit(
-            self,
-            _clear_websocket_stale_previous_response_cache,
-            clock=clock,
-        )
+        _initialize_http_bridge_retry_circuit(self, _clear_websocket_stale_previous_response_cache, clock=clock)
         self._http_bridge_account_timeout_failures, self._http_bridge_account_timeout_lock = {}, asyncio.Lock()
         self._http_bridge_inflight_sessions: dict[_HTTPBridgeSessionKey, asyncio.Future[_HTTPBridgeSession]] = {}
         self._http_bridge_turn_state_index: dict[tuple[str, str | None], _HTTPBridgeSessionKey] = {}
@@ -958,12 +954,8 @@ class ProxyService(
         self._websocket_continuity_index: dict[tuple[str, str | None], _WebSocketContinuityState] = {}
         self._background_cleanup_tasks: set[asyncio.Task[None]] = set()
         self._stream_api_key_release_retry_semaphore = asyncio.Semaphore(_STREAM_API_KEY_RELEASE_RETRY_MAX_CONCURRENCY)
-        # In-memory pin from upstream-issued file_id -> codex-lb account_id.
-        # Used so ``finalize_file`` for a given ``file_id`` is routed to the
-        # same account that handled ``create_file``. Cross-instance
-        # routing is best-effort: if finalize lands on a replica without a pin, we
-        # fall back to a fresh load-balancer selection. The TTL is short enough
-        # (5 min) that we never hold stale pins after the upstream upload window closes.
+        # In-memory file_id -> account pin; replicas without a pin fall back to
+        # fresh selection, and the short TTL keeps upload-window pins from lingering.
         self._file_account_pins: dict[str, _FilePinEntry] = {}
         self._file_account_pin_lock = asyncio.Lock()
         self._http_bridge_lock = anyio.Lock()
@@ -1051,7 +1043,7 @@ class ProxyService(
                 nonlocal route_fallback_used, route_mode, route_pool_id, route_endpoint_id
                 access_token = self._encryptor.decrypt(target.access_token_encrypted)
                 upstream_account_id = _header_account_id(target.chatgpt_account_id)
-                remaining_budget = _remaining_budget_seconds(deadline)
+                remaining_budget = self._remaining_budget_seconds(deadline)
                 if remaining_budget <= 0:
                     logger.warning(
                         "Thread goal request budget exhausted before upstream call request_id=%s operation=%s "
@@ -1147,7 +1139,7 @@ class ProxyService(
                         return response
                 if exc.status_code == 401:
                     try:
-                        remaining_budget = _remaining_budget_seconds(deadline)
+                        remaining_budget = self._remaining_budget_seconds(deadline)
                         if remaining_budget <= 0:
                             logger.warning(
                                 "Thread goal request budget exhausted before forced refresh retry request_id=%s "
@@ -1197,7 +1189,7 @@ class ProxyService(
                                     account_id_value = account.id
                                     account = await self._ensure_fresh_with_budget_or_auth_error(
                                         account,
-                                        timeout_seconds=_remaining_budget_seconds(deadline),
+                                        timeout_seconds=self._remaining_budget_seconds(deadline),
                                     )
                                     try:
                                         response = await _call_goal(account)
@@ -1526,7 +1518,7 @@ class ProxyService(
         force_current = force
         while True:
             attempt += 1
-            remaining_budget = _remaining_budget_seconds(deadline)
+            remaining_budget = self._remaining_budget_seconds(deadline)
             if remaining_budget <= 0:
                 logger.warning(
                     "%s request budget exhausted before freshness check request_id=%s account_id=%s",
@@ -1611,7 +1603,7 @@ class ProxyService(
                 self,
                 account,
                 force=force,
-                timeout_seconds=_remaining_budget_seconds(deadline),
+                timeout_seconds=self._remaining_budget_seconds(deadline),
                 privacy_policy=privacy_policy,
             )
 
@@ -1640,7 +1632,7 @@ class ProxyService(
             failover_failed_account = _proxy_response_failed_account(failover_exc, next_account)
             setattr(failover_exc, _FAILED_ACCOUNT_ATTR, failover_failed_account)
             if failover_exc.status_code == 401:
-                remaining_budget = _remaining_budget_seconds(deadline)
+                remaining_budget = self._remaining_budget_seconds(deadline)
                 if remaining_budget <= 0:
                     _raise_proxy_budget_exhausted()
                 try:
@@ -1749,7 +1741,7 @@ class ProxyService(
         traffic_class: TrafficClass = TRAFFIC_CLASS_FOREGROUND,
         redact_sensitive_details: bool = False,
     ) -> AccountSelection:
-        remaining_budget = _remaining_budget_seconds(deadline)
+        remaining_budget = self._remaining_budget_seconds(deadline)
         if remaining_budget <= 0:
             logger.warning(
                 "%s request budget exhausted before account selection request_id=%s", kind.title(), request_id

@@ -16,6 +16,7 @@ from app.core.clients.proxy_websocket import UpstreamWebSocket
 from app.db.models import AccountStatus, Base
 from app.modules.api_keys.service import ApiKeyData, ApiKeyUsageReservationData
 from app.modules.proxy import service as proxy_service
+from app.modules.proxy._service.http_bridge import helpers as http_bridge_helpers
 from app.modules.proxy._service.http_bridge import upstream_events as http_bridge_upstream_events
 from app.modules.proxy.durable_bridge_coordinator import DurableBridgeSessionCoordinator
 from tests.simulation.virtual_time import VirtualClock, VirtualScheduler
@@ -139,6 +140,29 @@ async def test_cancelled_stream_settlement_task_releases_reservation(
     assert ("release_stream_api_key_reservation_after_cancelled_settlement", "req-cancel-settle") in scheduled
     assert ("key-cancel-settle", "res-cancel-settle") in scheduled
     assert release_retry_flags == [True]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_task_cleanup_is_scheduler_owned() -> None:
+    clock = VirtualClock()
+    scheduler = VirtualScheduler(clock)
+    cleanup_tasks: set[asyncio.Task[None]] = set()
+    blocked = asyncio.Event()
+    task = scheduler.create_task(blocked.wait())
+
+    await scheduler.drain()
+    http_bridge_helpers._cancel_and_track_cancelled_task(
+        task,
+        label="owned-cleanup",
+        cleanup_tasks=cleanup_tasks,
+        scheduler=scheduler,
+    )
+
+    assert cleanup_tasks
+    await scheduler.cancel_owned_tasks()
+
+    assert task.done() is True
+    assert all(cleanup_task.done() for cleanup_task in cleanup_tasks)
 
 
 @pytest.mark.asyncio

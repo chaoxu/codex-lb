@@ -116,3 +116,52 @@ async def test_abandoned_startup_probe_task_does_not_warn() -> None:
 
     leaked = [m for m in captured if "never retrieved" in m.lower() or "shielded future" in m]
     assert not leaked, f"probe task leaked an unretrieved exception: {captured}"
+
+
+@pytest.mark.asyncio
+async def test_capacity_ready_probe_timeout_uses_virtual_scheduler() -> None:
+    clock = VirtualClock()
+    scheduler = VirtualScheduler(clock)
+    first_task = scheduler.create_task(scheduler.sleep(1.0, result="response.created"))
+    capacity_ready_event = proxy_api._CapacityStartupReadyEvent()
+    capacity_ready_event.set()
+    probe_task = scheduler.create_task(
+        proxy_api._wait_for_first_stream_probe(
+            first_task,
+            timeout_seconds=0.05,
+            capacity_wait_event=asyncio.Event(),
+            capacity_ready_event=capacity_ready_event,
+            scheduler=scheduler,
+        )
+    )
+
+    await scheduler.drain()
+    assert probe_task.done() is False
+    await scheduler.advance(0.05)
+
+    assert await probe_task is False
+    await scheduler.cancel_owned_tasks()
+
+
+@pytest.mark.asyncio
+async def test_capacity_signal_discovery_timeout_uses_virtual_scheduler(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = VirtualClock()
+    scheduler = VirtualScheduler(clock)
+    first_task = scheduler.create_task(scheduler.sleep(1.0, result="response.created"))
+    monkeypatch.setattr(proxy_api, "_CAPACITY_WAIT_MARKER_GRACE_SECONDS", 0.05)
+    probe_task = scheduler.create_task(
+        proxy_api._wait_for_first_stream_probe(
+            first_task,
+            timeout_seconds=0.01,
+            capacity_wait_event=asyncio.Event(),
+            scheduler=scheduler,
+        )
+    )
+
+    await scheduler.drain()
+    await scheduler.advance(0.01)
+    assert probe_task.done() is False
+    await scheduler.advance(0.05)
+
+    assert await probe_task is False
+    await scheduler.cancel_owned_tasks()
