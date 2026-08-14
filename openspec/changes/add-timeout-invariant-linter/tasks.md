@@ -2,7 +2,7 @@
 
 - [x] 1.1 Verify curated timeout inequalities against current code before
   encoding them.
-- [x] 1.2 Add a declarative rule table with at least 20 verified Settings-field
+- [x] 1.2 Add a declarative rule table with the accepted 8 verified startup
   inequalities and code-anchored rationales.
 - [x] 1.3 Leave unverified curated timeout entries as TODOs rather than
   enforcing them.

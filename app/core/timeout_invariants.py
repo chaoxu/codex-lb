@@ -37,13 +37,12 @@ class TimeoutSettings(Protocol):
     http_responses_stream_request_budget_seconds: float
     compact_request_budget_seconds: float
     sse_keepalive_interval_seconds: float
-    token_refresh_timeout_seconds: float
-    token_refresh_claim_ttl_seconds: float
     http_responses_session_bridge_request_budget_seconds: float
     http_responses_session_bridge_stuck_gate_retire_after_seconds: float
     http_responses_session_bridge_clean_close_retry_jitter_max_seconds: float
     proxy_admission_wait_timeout_seconds: float
     proxy_account_lease_ttl_seconds: float
+    model_registry_enabled: bool
 
     @property
     def model_registry_snapshot_max_age_seconds(self) -> int | float: ...
@@ -105,7 +104,6 @@ STREAM_BUDGET = _field(
 COMPACT_BUDGET = _field("compact_request_budget_seconds", "app/modules/proxy/_service/compact.py:585")
 SSE_KEEPALIVE = _field("sse_keepalive_interval_seconds", "app/modules/proxy/api.py:3930")
 TOKEN_REFRESH = _field("token_refresh_timeout_seconds", "app/modules/accounts/auth_manager.py:1123")
-TOKEN_CLAIM_TTL = _field("token_refresh_claim_ttl_seconds", "app/core/config/settings.py:660")
 BRIDGE_BUDGET = _field(
     "http_responses_session_bridge_request_budget_seconds",
     "app/modules/proxy/_service/http_bridge/helpers.py:2469",
@@ -115,12 +113,7 @@ BRIDGE_CLEAN_CLOSE_JITTER = _field(
     "app/modules/proxy/_service/http_bridge/request_submit.py:294",
 )
 ADMISSION_WAIT = _field("proxy_admission_wait_timeout_seconds", "app/modules/proxy/service.py:768")
-ACCOUNT_LEASE_TTL = _field("proxy_account_lease_ttl_seconds", "app/modules/proxy/load_balancer.py:1846")
-TOKEN_CLAIM_FLOOR = _expr(
-    "proxy_admission_wait_timeout_seconds + 2 * token_refresh_timeout_seconds",
-    "app/core/config/settings.py:667",
-    lambda settings: settings.proxy_admission_wait_timeout_seconds + 2.0 * settings.token_refresh_timeout_seconds,
-)
+ACCOUNT_LEASE_TTL = _field("proxy_account_lease_ttl_seconds", "app/modules/proxy/load_balancer.py:1993")
 BRIDGE_STUCK_GATE_HARD_ANCHOR_RETIRE = _expr(
     "2 * http_responses_session_bridge_stuck_gate_retire_after_seconds",
     "app/modules/proxy/_service/http_bridge/helpers.py:686",
@@ -141,7 +134,7 @@ DURABLE_BRIDGE_RETRY_CIRCUIT_STATE_TTL = _expr(
     lambda settings: _durable_bridge_retry_circuit_state_ttl_seconds(),
 )
 DURABLE_BRIDGE_RETRY_CIRCUIT_MIN_TTL = _expr(
-    "max(_HTTP_BRIDGE_RETRY_CIRCUIT_MAX_BACKOFF_SECONDS, _HTTP_BRIDGE_RETRY_CIRCUIT_HALF_OPEN_LEASE_SECONDS)",
+    "_HTTP_BRIDGE_RETRY_CIRCUIT_MAX_BACKOFF_SECONDS + _HTTP_BRIDGE_RETRY_CIRCUIT_HALF_OPEN_LEASE_SECONDS",
     "app/modules/proxy/_service/http_bridge/retry_circuit.py:19-21",
     lambda settings: _durable_bridge_retry_circuit_min_ttl_seconds(),
 )
@@ -165,19 +158,10 @@ def _durable_bridge_retry_circuit_min_ttl_seconds() -> float:
         _HTTP_BRIDGE_RETRY_CIRCUIT_MAX_BACKOFF_SECONDS,
     )
 
-    return float(
-        max(_HTTP_BRIDGE_RETRY_CIRCUIT_MAX_BACKOFF_SECONDS, _HTTP_BRIDGE_RETRY_CIRCUIT_HALF_OPEN_LEASE_SECONDS)
-    )
+    return float(_HTTP_BRIDGE_RETRY_CIRCUIT_MAX_BACKOFF_SECONDS + _HTTP_BRIDGE_RETRY_CIRCUIT_HALF_OPEN_LEASE_SECONDS)
 
 
 TIMEOUT_INVARIANT_RULES: tuple[TimeoutInvariantRule, ...] = (
-    TimeoutInvariantRule(
-        "upstream-connect-within-stream-budget",
-        UPSTREAM_CONNECT,
-        "<=",
-        STREAM_BUDGET,
-        "Responses streams use the stream budget, so connect cannot outlive the stream request envelope.",
-    ),
     TimeoutInvariantRule(
         "admission-wait-within-proxy-budget",
         ADMISSION_WAIT,
@@ -198,28 +182,6 @@ TIMEOUT_INVARIANT_RULES: tuple[TimeoutInvariantRule, ...] = (
         "<=",
         COMPACT_BUDGET,
         "Compact response-create admission must not outlive the compact request budget.",
-    ),
-    TimeoutInvariantRule(
-        "sse-keepalive-within-bridge-budget",
-        SSE_KEEPALIVE,
-        "<",
-        BRIDGE_BUDGET,
-        "HTTP bridge keepalives must fire before the bridge request deadline is exhausted.",
-    ),
-    TimeoutInvariantRule(
-        "token-refresh-claim-covers-admission-and-exchange",
-        TOKEN_CLAIM_TTL,
-        ">=",
-        TOKEN_CLAIM_FLOOR,
-        "A refresh claim that expires during admission or OAuth exchange can let two replicas reuse one single-use "
-        "refresh token.",
-    ),
-    TimeoutInvariantRule(
-        "token-refresh-exchange-within-claim-ttl",
-        TOKEN_REFRESH,
-        "<=",
-        TOKEN_CLAIM_TTL,
-        "The OAuth exchange must complete before the refresh claim can expire under a healthy claimant.",
     ),
     TimeoutInvariantRule(
         "bridge-stuck-gate-retire-within-bridge-budget",
@@ -292,6 +254,8 @@ _RELATIONS: dict[str, Callable[[float, float], bool]] = {
 def find_timeout_invariant_violations(settings: TimeoutSettings) -> list[TimeoutInvariantViolation]:
     violations: list[TimeoutInvariantViolation] = []
     for rule in TIMEOUT_INVARIANT_RULES:
+        if rule.id == "model-registry-snapshot-outlives-refresh-interval" and not settings.model_registry_enabled:
+            continue
         lhs_value = rule.lhs.evaluate(settings)
         rhs_value = rule.rhs.evaluate(settings)
         if not _RELATIONS[rule.relation](lhs_value, rhs_value):

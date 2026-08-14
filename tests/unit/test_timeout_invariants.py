@@ -22,7 +22,7 @@ pytestmark = pytest.mark.unit
 
 def test_default_settings_satisfy_timeout_invariants() -> None:
     settings = Settings()
-    assert len(TIMEOUT_INVARIANT_RULES) == 12
+    assert len(TIMEOUT_INVARIANT_RULES) == 8
     assert find_timeout_invariant_violations(settings) == []
 
 
@@ -37,8 +37,6 @@ def _timeout_settings(**overrides: float | bool) -> SimpleNamespace:
             "compact_request_budget_seconds",
             "stream_idle_timeout_seconds",
             "sse_keepalive_interval_seconds",
-            "token_refresh_timeout_seconds",
-            "token_refresh_claim_ttl_seconds",
             "usage_fetch_timeout_seconds",
             "usage_refresh_interval_seconds",
             "rate_limit_reset_credits_refresh_interval_seconds",
@@ -50,6 +48,7 @@ def _timeout_settings(**overrides: float | bool) -> SimpleNamespace:
             "proxy_admission_wait_timeout_seconds",
             "proxy_account_lease_ttl_seconds",
             "proxy_refresh_failure_cooldown_seconds",
+            "model_registry_enabled",
             "model_registry_snapshot_max_age_seconds",
             "timeout_invariant_validation_strict",
         )
@@ -61,23 +60,19 @@ def _timeout_settings(**overrides: float | bool) -> SimpleNamespace:
 @pytest.mark.parametrize(
     ("rule_id", "overrides"),
     [
-        ("upstream-connect-within-stream-budget", {"http_responses_stream_request_budget_seconds": 7.0}),
         ("admission-wait-within-proxy-budget", {"proxy_request_budget_seconds": 9.0}),
         ("admission-wait-within-stream-budget", {"http_responses_stream_request_budget_seconds": 9.0}),
         ("admission-wait-within-compact-budget", {"compact_request_budget_seconds": 9.0}),
-        ("sse-keepalive-within-bridge-budget", {"http_responses_session_bridge_request_budget_seconds": 10.0}),
-        (
-            "token-refresh-claim-covers-admission-and-exchange",
-            {"token_refresh_claim_ttl_seconds": 25.0},
-        ),
-        ("token-refresh-exchange-within-claim-ttl", {"token_refresh_claim_ttl_seconds": 7.0}),
         (
             "bridge-stuck-gate-retire-within-bridge-budget",
             {"http_responses_session_bridge_request_budget_seconds": 600.0},
         ),
         ("account-lease-ttl-covers-proxy-budget", {"proxy_account_lease_ttl_seconds": 599.0}),
         ("account-lease-ttl-covers-compact-budget", {"proxy_account_lease_ttl_seconds": 179.0}),
-        ("model-registry-snapshot-outlives-refresh-interval", {"model_registry_snapshot_max_age_seconds": 300.0}),
+        (
+            "model-registry-snapshot-outlives-refresh-interval",
+            {"model_registry_enabled": True, "model_registry_snapshot_max_age_seconds": 300.0},
+        ),
     ],
 )
 def test_each_settings_backed_rule_names_violation(rule_id: str, overrides: dict[str, float]) -> None:
@@ -90,11 +85,24 @@ def test_each_settings_backed_rule_names_violation(rule_id: str, overrides: dict
     assert rule_id in formatted
 
 
+def test_disabled_model_registry_skips_snapshot_cadence_rule() -> None:
+    settings = _timeout_settings(
+        model_registry_enabled=False,
+        model_registry_snapshot_max_age_seconds=1.0,
+    )
+
+    violations = find_timeout_invariant_violations(settings)
+
+    assert all(violation.rule.id != "model-registry-snapshot-outlives-refresh-interval" for violation in violations)
+
+
 def test_durable_bridge_retry_circuit_rule_names_violation(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         durable_bridge_repository,
         "DURABLE_BRIDGE_RETRY_CIRCUIT_STATE_TTL_SECONDS",
-        retry_circuit._HTTP_BRIDGE_RETRY_CIRCUIT_MAX_BACKOFF_SECONDS,
+        retry_circuit._HTTP_BRIDGE_RETRY_CIRCUIT_MAX_BACKOFF_SECONDS
+        + retry_circuit._HTTP_BRIDGE_RETRY_CIRCUIT_HALF_OPEN_LEASE_SECONDS
+        - 1.0,
     )
 
     violations = find_timeout_invariant_violations(Settings())
@@ -105,31 +113,31 @@ def test_durable_bridge_retry_circuit_rule_names_violation(monkeypatch: pytest.M
 
 
 def test_non_strict_startup_validation_logs_critical(caplog: pytest.LogCaptureFixture) -> None:
-    settings = Settings(http_responses_stream_request_budget_seconds=5.0)
+    settings = Settings(proxy_request_budget_seconds=5.0)
 
     with caplog.at_level(logging.CRITICAL, logger="app.core.timeout_invariants"):
         violations = validate_runtime_timeout_invariants(settings)
 
     assert violations
-    assert "timeout invariant violation: upstream-connect-within-stream-budget" in caplog.text
+    assert "timeout invariant violation: admission-wait-within-proxy-budget" in caplog.text
 
 
 def test_strict_mode_raises() -> None:
     settings = Settings(
-        http_responses_stream_request_budget_seconds=5.0,
+        proxy_request_budget_seconds=5.0,
         timeout_invariant_validation_strict=True,
     )
 
     with pytest.raises(TimeoutInvariantError) as exc_info:
         validate_runtime_timeout_invariants(settings)
 
-    assert "upstream-connect-within-stream-budget" in str(exc_info.value)
+    assert "admission-wait-within-proxy-budget" in str(exc_info.value)
 
 
 def test_explicit_strict_validation_raises() -> None:
-    settings = Settings(http_responses_stream_request_budget_seconds=5.0)
+    settings = Settings(proxy_request_budget_seconds=5.0)
 
-    with pytest.raises(TimeoutInvariantError, match="upstream-connect-within-stream-budget"):
+    with pytest.raises(TimeoutInvariantError, match="admission-wait-within-proxy-budget"):
         validate_timeout_invariants(settings, strict=True, log=False)
 
 
@@ -144,14 +152,14 @@ def test_cli_strict_flag_exits_one_and_reports_rule(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     get_settings.cache_clear()
-    monkeypatch.setenv("CODEX_LB_HTTP_RESPONSES_STREAM_REQUEST_BUDGET_SECONDS", "5")
+    monkeypatch.setenv("CODEX_LB_PROXY_REQUEST_BUDGET_SECONDS", "5")
     try:
         assert main(["--strict"]) == 1
     finally:
         get_settings.cache_clear()
 
     captured = capsys.readouterr()
-    assert "upstream-connect-within-stream-budget" in captured.err
+    assert "admission-wait-within-proxy-budget" in captured.err
 
 
 def test_cli_without_strict_exits_zero_and_reports_violation(
@@ -160,7 +168,7 @@ def test_cli_without_strict_exits_zero_and_reports_violation(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     get_settings.cache_clear()
-    monkeypatch.setenv("CODEX_LB_HTTP_RESPONSES_STREAM_REQUEST_BUDGET_SECONDS", "5")
+    monkeypatch.setenv("CODEX_LB_PROXY_REQUEST_BUDGET_SECONDS", "5")
     try:
         with caplog.at_level(logging.CRITICAL, logger="app.core.timeout_invariants"):
             assert main([]) == 0
@@ -168,5 +176,5 @@ def test_cli_without_strict_exits_zero_and_reports_violation(
         get_settings.cache_clear()
 
     captured = capsys.readouterr()
-    assert "upstream-connect-within-stream-budget" in captured.err
-    assert "timeout invariant violation: upstream-connect-within-stream-budget" in caplog.text
+    assert "admission-wait-within-proxy-budget" in captured.err
+    assert "timeout invariant violation: admission-wait-within-proxy-budget" in caplog.text

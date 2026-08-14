@@ -256,6 +256,13 @@ the host side of the compose `ports` mapping instead.
 | `CODEX_LB_TIMEOUT_INVARIANT_VALIDATION_STRICT` | `bool` | `False` |
 | `CODEX_LB_WARMUP_MODEL` | `str` | `'gpt-5.4-mini'` |
 
+`CODEX_LB_TIMEOUT_INVARIANT_VALIDATION_STRICT` controls whether startup timeout
+invariant diagnostics are advisory or fatal. The default `False` keeps startup
+non-strict: violations are logged at CRITICAL and the process continues.
+Setting it to `True` makes the same startup validation raise and abort boot.
+The same rule table is available in CI via `python -m app.core.timeout_invariants
+--strict`.
+
 ## Removed / deprecated
 
 Deprecated env aliases (still functional for one release; the dashboard
