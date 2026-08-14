@@ -17693,6 +17693,70 @@ async def test_claim_durable_http_bridge_session_rejects_remote_owner_without_ta
 
 
 @pytest.mark.asyncio
+async def test_claim_durable_http_bridge_session_retries_ownerless_row_before_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = proxy_service.ProxyService(cast(Any, nullcontext()))
+    app_settings = _make_app_settings()
+    session = proxy_service._HTTPBridgeSession(
+        key=proxy_service._HTTPBridgeSessionKey("session_header", "sid-123", None),
+        headers={"x-codex-session-id": "sid-123"},
+        affinity=proxy_service._AffinityPolicy(
+            key="sid-123",
+            kind=proxy_service.StickySessionKind.CODEX_SESSION,
+        ),
+        request_model="gpt-5.4",
+        account=cast(Any, SimpleNamespace(id="acc-1", status=AccountStatus.ACTIVE)),
+        upstream=cast(UpstreamWebSocket, SimpleNamespace(close=AsyncMock())),
+        upstream_control=proxy_service._WebSocketUpstreamControl(),
+        pending_requests=deque(),
+        pending_lock=anyio.Lock(),
+        response_create_gate=asyncio.Semaphore(1),
+        queued_request_count=0,
+        last_used_at=1.0,
+        idle_ttl_seconds=120.0,
+    )
+    claim_live_session = AsyncMock(
+        side_effect=[
+            proxy_service.DurableBridgeLookup(
+                session_id="durable-1",
+                canonical_kind="session_header",
+                canonical_key="sid-123",
+                api_key_scope="__anonymous__",
+                account_id="acc-1",
+                owner_instance_id=None,
+                owner_epoch=2,
+                lease_expires_at=proxy_service.utcnow() + timedelta(seconds=60),
+                state=HttpBridgeSessionState.CLOSED,
+                latest_turn_state=None,
+                latest_response_id=None,
+            ),
+            proxy_service.DurableBridgeLookup(
+                session_id="durable-1",
+                canonical_kind="session_header",
+                canonical_key="sid-123",
+                api_key_scope="__anonymous__",
+                account_id="acc-1",
+                owner_instance_id=app_settings.http_responses_session_bridge_instance_id,
+                owner_epoch=3,
+                lease_expires_at=proxy_service.utcnow() + timedelta(seconds=60),
+                state=HttpBridgeSessionState.ACTIVE,
+                latest_turn_state=None,
+                latest_response_id=None,
+            ),
+        ]
+    )
+    monkeypatch.setattr(service._durable_bridge, "claim_live_session", claim_live_session)
+    monkeypatch.setattr(proxy_service, "get_settings", lambda: app_settings)
+
+    await service._claim_durable_http_bridge_session(session, allow_takeover=False)
+
+    assert claim_live_session.await_count == 2
+    assert session.durable_session_id == "durable-1"
+    assert session.durable_owner_epoch == 3
+
+
+@pytest.mark.asyncio
 async def test_get_or_create_http_bridge_session_hard_continuity_lookup_failure_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -25087,6 +25151,32 @@ async def test_http_bridge_eventless_timeout_force_retires_with_admission_waiter
     fail_pending_await_args = fail_pending.await_args
     assert fail_pending_await_args is not None
     assert fail_pending_await_args.kwargs["penalize_account"] is False
+
+
+@pytest.mark.asyncio
+async def test_reset_http_bridge_session_after_local_terminal_error_is_account_neutral(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = proxy_service.ProxyService(cast(Any, nullcontext()))
+    session = _make_bridge_session(key_value="local-reset-account-neutral")
+    service._http_bridge_sessions[session.key] = session
+    fail_pending = AsyncMock()
+    close_session = AsyncMock()
+    monkeypatch.setattr(service, "_fail_pending_websocket_requests", fail_pending)
+    monkeypatch.setattr(service, "_close_http_bridge_session", close_session)
+
+    await service._reset_http_bridge_session_after_local_terminal_error(
+        session,
+        error_code="stream_incomplete",
+        error_message=http_bridge_streaming_module._HTTP_BRIDGE_LOCAL_RESET_MESSAGE,
+    )
+
+    fail_pending.assert_awaited_once()
+    fail_pending_await_args = fail_pending.await_args
+    assert fail_pending_await_args is not None
+    assert fail_pending_await_args.kwargs["penalize_account"] is False
+    close_session.assert_awaited_once_with(session, release_durable_session=True)
+    assert session.key not in service._http_bridge_sessions
 
 
 @pytest.mark.asyncio

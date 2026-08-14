@@ -143,6 +143,9 @@ from app.modules.proxy._service.http_bridge.service_stubs import (
     _websocket_event_error_param,
     _websocket_event_error_type,
 )
+from app.modules.proxy._service.http_bridge.upstream_events import (
+    _abandon_durable_http_bridge_continuity,
+)
 from app.modules.proxy._service.observability import (
     _hash_identifier as _hash_identifier,
 )
@@ -479,11 +482,11 @@ def _http_bridge_dead_owner_previous_response_not_found_terminal(
     return cast(
         dict[str, JsonValue],
         response_failed_event(
-            error["code"],
-            error["message"],
-            error_type=error["type"],
+            cast(str, error["code"]),
+            cast(str, error["message"]),
+            error_type=cast(str, error["type"]),
             response_id=response_id,
-            error_param=error["param"],
+            error_param=cast(str | None, error["param"]),
         ),
     )
 
@@ -1312,7 +1315,8 @@ class _HTTPBridgeStreamingMixin:
             current_instance = _service_get_settings().http_responses_session_bridge_instance_id
             current_process_epoch = http_bridge_owner_process_epoch()
             dead_owner_process_epoch_mismatch = (
-                durable_lookup.owner_process_epoch is not None
+                durable_lookup.owner_instance_id == current_instance
+                and durable_lookup.owner_process_epoch is not None
                 and durable_lookup.owner_process_epoch != current_process_epoch
             )
             dead_owner_anchor = _http_bridge_durable_owner_is_dead(
@@ -3525,6 +3529,7 @@ class _HTTPBridgeStreamingMixin:
             error_message=error_message,
             api_key=None,
             response_create_gate=session.response_create_gate,
+            penalize_account=False,
         )
         await self._close_http_bridge_session(session, release_durable_session=not preserve_durable_lease)
 
@@ -3594,20 +3599,18 @@ class _HTTPBridgeStreamingMixin:
                     request_state.request_id,
                     exc.error_code,
                 )
+                mark_bridge_eventless_failure()
+                await record_bridge_eventless_timeout_failure()
                 if getattr(
                     _service_get_settings(),
                     "http_responses_session_bridge_ambiguous_continuation_recovery_mode",
                     "fail_closed",
                 ) == "server_indefinite_recovery" and _http_bridge_server_anchored_replay_enabled(request_state):
-                    # Let the outer server-owned recovery loop classify this
-                    # eventless transport failure as retryable. Returning a
-                    # synthetic response.failed event would make the loop
-                    # believe the attempt completed successfully after one try.
                     raise ProxyResponseError(
-                        502,
+                        503,
                         openai_error(
-                            "stream_idle_timeout",
-                            str(exc),
+                            _HTTP_BRIDGE_EVENTLESS_TIMEOUT_DETAIL,
+                            _HTTP_BRIDGE_EVENTLESS_TIMEOUT_MESSAGE,
                             error_type="server_error",
                         ),
                     ) from exc
@@ -3617,8 +3620,8 @@ class _HTTPBridgeStreamingMixin:
                         cast(
                             Mapping[str, JsonValue],
                             response_failed_event(
-                                exc.error_code,
-                                str(exc),
+                                _HTTP_BRIDGE_EVENTLESS_TIMEOUT_DETAIL,
+                                _HTTP_BRIDGE_EVENTLESS_TIMEOUT_MESSAGE,
                                 response_id=downstream_response_id,
                             ),
                         )
@@ -3644,6 +3647,34 @@ class _HTTPBridgeStreamingMixin:
                 request_state.failure_phase_override = "bridge"
             if request_state.failure_detail_override is None:
                 request_state.failure_detail_override = _HTTP_BRIDGE_EVENTLESS_TIMEOUT_DETAIL
+
+        async def record_bridge_eventless_timeout_failure() -> None:
+            consecutive_failures = await self._record_http_bridge_retry_circuit_failure(
+                session,
+                detail=_HTTP_BRIDGE_EVENTLESS_TIMEOUT_DETAIL,
+            )
+            observed_response_events = max(
+                request_state.response_event_count,
+                int(
+                    request_state.response_id is not None
+                    or request_state.latency_response_created_ms is not None
+                    or request_state.downstream_visible
+                ),
+            )
+            if (
+                observed_response_events > 0
+                or consecutive_failures is None
+                or consecutive_failures
+                < _service_get_settings().http_responses_session_bridge_anchor_poison_failure_threshold
+            ):
+                return
+            if await _abandon_durable_http_bridge_continuity(self, session):
+                await self._retire_stale_pending_http_bridge_session(
+                    session,
+                    detail="repeated_zero_event_idle_timeout",
+                    response_events_seen=0,
+                    retired_request_count=0,
+                )
 
         async def startup_continuity_cooldown_terminal_event() -> str | None:
             if (
@@ -4228,10 +4259,7 @@ class _HTTPBridgeStreamingMixin:
                                             if keepalive_event is not None:
                                                 yield keepalive_event
                                             continue
-                                        await self._record_http_bridge_retry_circuit_failure(
-                                            session,
-                                            detail=_HTTP_BRIDGE_EVENTLESS_TIMEOUT_DETAIL,
-                                        )
+                                        await record_bridge_eventless_timeout_failure()
                                         if PROMETHEUS_AVAILABLE and stream_idle_timeout_total is not None:
                                             stream_idle_timeout_total.labels(surface="http_bridge_eventless").inc()
                                         mark_bridge_eventless_failure()
