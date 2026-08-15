@@ -24,7 +24,8 @@ kills them under three different budgets:
 
 - `queued` - waiting at the admission gate (`gateDeadline`).
 - `active` - request dispatched upstream, `response.created` not seen yet.
-  This is the **pre-response eventless phase** (`preResponseDeadline`).
+  This is the **pre-response eventless phase** (`preResponseDeadline`), and its
+  phase resets still consume the same request budget.
 - `streaming` - response started, incremental events flowing
   (`requestDeadline`, i.e. the stream-idle/request budget).
 
@@ -51,7 +52,7 @@ kills them under three different budgets:
 | Invariant | Requirement | Demonstrating action / weakening |
 | --- | --- | --- |
 | `Inv1AnchorCurrent` | Anchor use requires current owner epoch, compatible lineage, and safe provenance. | `UseAnchor` records `badAnchorUse`; `weak-ignore-owner-epoch.cfg` demonstrates stale anchor reuse can violate it. |
-| `Inv2DeadlineOrdering` | Connect, first-byte, gate, and request deadlines remain ordered under the original request deadline. | `QueueTurn` assigns phase deadlines; `weak-single-shared-timeout.cfg` demonstrates a shared timeout can violate ordering. |
+| `Inv2DeadlineOrdering` | Connect, first-byte, gate, and request deadlines remain ordered under the original request deadline, with later active-phase deadlines clamped to the remaining request budget before each phase reset. | `QueueTurn` assigns phase deadlines and the active-phase transitions clamp them after elapsed wait; `weak-single-shared-timeout.cfg` demonstrates a shared timeout can violate ordering. |
 | `Inv3ReservationSettledExactlyOnce` | Every acquired terminal turn has exactly one settlement event and a settled reservation state. | `CompleteTurn`, `CancelTurn`, `ExpireDeadline`, and `FinalizeCompletedDelivery` increment `settlementCount`; `weak-skip-release-on-cancel.cfg`, `weak-double-settle.cfg`, and `weak-popped-not-finalized.cfg` demonstrate zero, double, and lost-finalizer failures. |
 | `Inv4FreshSnapshots` | Routing cannot use a local snapshot behind durable freshness evidence. | Normal `RouteFromSnapshot` consumes a fresh snapshot; `weak-stale-cache.cfg` removes the freshness guard. |
 | `Inv5SingleOwnerCAS` | Singleton/account work mutates under a single durable owner epoch. | `AcquireTurn` enforces empty durable ownership and no live turn on the same account; `weak-non-atomic-claim.cfg` demonstrates duplicate live owners. |
@@ -60,7 +61,7 @@ kills them under three different budgets:
 | `Inv8ShutdownDrain` | Draining forbids admission of new externally visible work and shutdown completion requires no registered work. | `QueueTurn` is gated by `CanAdmit`; `weak-shutdown-admit.cfg` demonstrates post-drain admission. |
 | `Inv9TerminalOwnerReleased` | Every acquired terminal turn releases the durable owner slot and finalizer owner. | Terminal actions call epoch-fenced release; `weak-leak-owner-on-terminal.cfg` demonstrates a leaked owner lease. |
 | `Inv10AnchorAccountOwnership` | A request never dispatches with a continuity anchor owned by a different account, and no turn past admission carries a foreign-owned anchor. | `AcquireTurn` refuses a foreign-owned injected anchor (the injection is weakening-only, like `MisrouteProducer`) and records `crossAccountDispatch`; same-account anchors still come from `StartStream` and are shown usable by `UseAnchor`, so the guard is not vacuous. `UpstreamRespondsTo` makes `response.created`/`response.completed` unreachable for a foreign anchor, so the weakened turn wedges in the pre-response phase. `weak-cross-account-anchor.cfg` demonstrates it. |
-| `Inv11PreResponseBudget` | The pre-response eventless bound is derived from the named budgets - it is the minimum of the owner-side gate-retire and stream-idle budgets, at or above the keepalive cadence floor, and strictly below the post-start stream-idle budget - and no kill is ever reported under the post-start stream-idle budget while the response had not started. | `QueueTurn` assigns `preResponseDeadline`/`gateRetireDeadline` from named budgets; `ExpireDeadline` picks its bound and its budget label per phase and records `mislabeledKill`; `weak-conflated-timers.cfg` demonstrates a single shared timer name killing a healthy pre-start wait under the wrong budget. |
+| `Inv11PreResponseBudget` | The pre-response eventless bound is derived from the named budgets - it is the minimum of the owner-side gate-retire and stream-idle budgets, stays at or above the keepalive cadence floor until earlier active waits have consumed part of the request budget, and no kill is ever reported under the post-start stream-idle budget while the response had not started. | `QueueTurn` assigns `preResponseDeadline`/`gateRetireDeadline` from named budgets; the active-phase transitions clamp carried budget after every elapsed wait before resetting phase time; `ExpireDeadline` picks its bound and its budget label per phase and records `mislabeledKill`; `weak-conflated-timers.cfg` demonstrates a single shared timer name killing a healthy pre-start wait under the wrong budget. |
 
 The full configuration also checks natural liveness properties:
 

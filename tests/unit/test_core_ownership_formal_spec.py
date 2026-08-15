@@ -20,6 +20,7 @@ def test_core_ownership_guards_snapshot_refresh_and_retry_outcomes() -> None:
     spec = CORE_OWNERSHIP.read_text()
 
     assert "/\\ snapshotVersion[r][a] # durableVersion[a]" in spec
+    assert "/\\ ~snapshotRouteAttempted[t]" in spec
     assert "ClientRetryFails ==" in spec
     assert "ClientRetrySucceeds ==" in spec
     assert "CompletedProducerEventuallyDelivered ==" in spec
@@ -30,3 +31,21 @@ def test_core_ownership_full_cfg_checks_completed_delivery_liveness() -> None:
     cfg = CORE_OWNERSHIP_CFG.read_text()
 
     assert "CompletedProducerEventuallyDelivered" in cfg
+
+
+def test_core_ownership_only_completes_after_response_phase() -> None:
+    spec = CORE_OWNERSHIP.read_text()
+
+    assert "CanComplete(t) ==" in spec
+    assert '/\\ (turnState[t] = "streaming" \\/ attemptPhase[t] = "awaiting_response")' in spec
+    assert "CompleteTurn(t) ==" in spec
+    assert "/\\ CanComplete(t)" in spec
+    assert "ClaimCompletedDelivery(t) ==" in spec
+
+
+def test_core_ownership_clamps_request_budget_before_each_phase_reset() -> None:
+    spec = CORE_OWNERSHIP.read_text()
+
+    assert spec.count("LET remainingRequest == SubtractFloor(requestDeadline[t], phaseElapsed[t])") == 3
+    assert spec.count("/\\ requestDeadline' = [requestDeadline EXCEPT ![t] = remainingRequest]") == 3
+    assert "StartStream(t, k) ==" in spec

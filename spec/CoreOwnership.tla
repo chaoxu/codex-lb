@@ -31,6 +31,7 @@ QueueWindowClosedClock == 1
 (* with the post-start stream-idle budget.                                  *)
 (***************************************************************************)
 Min2(x, y) == IF x <= y THEN x ELSE y
+SubtractFloor(x, y) == IF x > y THEN x - y ELSE 0
 
 KeepaliveInterval == 1
 MaxKeepaliveCount == 2
@@ -323,11 +324,16 @@ UpstreamConnected(t) ==
   /\ turnState[t] = "active"
   /\ attemptPhase[t] = "connect"
   /\ UpstreamRespondsTo(t)
+  /\ LET remainingRequest == SubtractFloor(requestDeadline[t], phaseElapsed[t])
+     IN /\ requestDeadline' = [requestDeadline EXCEPT ![t] = remainingRequest]
+        /\ gateDeadline' = [gateDeadline EXCEPT ![t] = Min2(gateDeadline[t], remainingRequest)]
+        /\ connectDeadline' = [connectDeadline EXCEPT ![t] = Min2(connectDeadline[t], remainingRequest)]
+        /\ firstByteDeadline' = [firstByteDeadline EXCEPT ![t] = Min2(firstByteDeadline[t], remainingRequest)]
+        /\ preResponseDeadline' = [preResponseDeadline EXCEPT ![t] = Min2(preResponseDeadline[t], remainingRequest)]
   /\ attemptPhase' = [attemptPhase EXCEPT ![t] = "awaiting_first_byte"]
   /\ phaseElapsed' = [phaseElapsed EXCEPT ![t] = 0]
   /\ UNCHANGED << clock, owner, ownerEpoch, turnState, turnReplica, turnAccount, turnEpoch,
-    acquisitionCount, settlementCount, reservation, gate, gateDeadline,
-    requestDeadline, connectDeadline, firstByteDeadline, preResponseDeadline, gateRetireDeadline,
+    acquisitionCount, settlementCount, reservation, gate, gateRetireDeadline,
     mislabeledKill, anchor, anchorUsed, badAnchorUse, crossAccountDispatch, durableVersion,
     snapshotVersion, routedWithStaleSnapshot, snapshotRouteAttempted, producerTarget,
     terminalReason, shutdownPhase, registered, ownerReleased, poppedFromPending,
@@ -338,11 +344,16 @@ UpstreamFirstByte(t) ==
   /\ turnState[t] = "active"
   /\ attemptPhase[t] = "awaiting_first_byte"
   /\ UpstreamRespondsTo(t)
+  /\ LET remainingRequest == SubtractFloor(requestDeadline[t], phaseElapsed[t])
+     IN /\ requestDeadline' = [requestDeadline EXCEPT ![t] = remainingRequest]
+        /\ gateDeadline' = [gateDeadline EXCEPT ![t] = Min2(gateDeadline[t], remainingRequest)]
+        /\ connectDeadline' = [connectDeadline EXCEPT ![t] = Min2(connectDeadline[t], remainingRequest)]
+        /\ firstByteDeadline' = [firstByteDeadline EXCEPT ![t] = Min2(firstByteDeadline[t], remainingRequest)]
+        /\ preResponseDeadline' = [preResponseDeadline EXCEPT ![t] = Min2(preResponseDeadline[t], remainingRequest)]
   /\ attemptPhase' = [attemptPhase EXCEPT ![t] = "awaiting_response"]
   /\ phaseElapsed' = [phaseElapsed EXCEPT ![t] = 0]
   /\ UNCHANGED << clock, owner, ownerEpoch, turnState, turnReplica, turnAccount, turnEpoch,
-    acquisitionCount, settlementCount, reservation, gate, gateDeadline,
-    requestDeadline, connectDeadline, firstByteDeadline, preResponseDeadline, gateRetireDeadline,
+    acquisitionCount, settlementCount, reservation, gate, gateRetireDeadline,
     mislabeledKill, anchor, anchorUsed, badAnchorUse, crossAccountDispatch, durableVersion,
     snapshotVersion, routedWithStaleSnapshot, snapshotRouteAttempted, producerTarget,
     terminalReason, shutdownPhase, registered, ownerReleased, poppedFromPending,
@@ -354,14 +365,19 @@ StartStream(t, k) ==
   /\ attemptPhase[t] = "awaiting_response"
   /\ UpstreamRespondsTo(t)
   /\ k \in AnchorKinds \ {"none"}
+  /\ LET remainingRequest == SubtractFloor(requestDeadline[t], phaseElapsed[t])
+     IN /\ requestDeadline' = [requestDeadline EXCEPT ![t] = remainingRequest]
+        /\ gateDeadline' = [gateDeadline EXCEPT ![t] = Min2(gateDeadline[t], remainingRequest)]
+        /\ connectDeadline' = [connectDeadline EXCEPT ![t] = Min2(connectDeadline[t], remainingRequest)]
+        /\ firstByteDeadline' = [firstByteDeadline EXCEPT ![t] = Min2(firstByteDeadline[t], remainingRequest)]
+        /\ preResponseDeadline' = [preResponseDeadline EXCEPT ![t] = Min2(preResponseDeadline[t], remainingRequest)]
   /\ turnState' = [turnState EXCEPT ![t] = "streaming"]
   /\ anchor' = [anchor EXCEPT ![t] =
       [kind |-> k, account |-> turnAccount[t], epoch |-> turnEpoch[t], lineageOk |-> TRUE]]
   /\ attemptPhase' = [attemptPhase EXCEPT ![t] = "streaming"]
   /\ phaseElapsed' = [phaseElapsed EXCEPT ![t] = 0]
   /\ UNCHANGED << clock, owner, ownerEpoch, turnReplica, turnAccount, turnEpoch,
-    acquisitionCount, settlementCount, reservation, gate, gateDeadline,
-    requestDeadline, connectDeadline, firstByteDeadline, preResponseDeadline, gateRetireDeadline,
+    acquisitionCount, settlementCount, reservation, gate, gateRetireDeadline,
     mislabeledKill, anchorUsed, badAnchorUse, crossAccountDispatch, durableVersion,
     snapshotVersion, routedWithStaleSnapshot, snapshotRouteAttempted, producerTarget,
     terminalReason, shutdownPhase, registered, ownerReleased, poppedFromPending,
@@ -432,9 +448,13 @@ OwnerLoss(t) ==
     completedDeliveryClaimed, producerDelivered, phaseElapsed, finalizerAborted,
     admittedDuringDrain, clientRetry, retryBackoff >>
 
-CompleteTurn(t) ==
+CanComplete(t) ==
   /\ turnState[t] \in {"active", "streaming"}
+  /\ (turnState[t] = "streaming" \/ attemptPhase[t] = "awaiting_response")
   /\ UpstreamRespondsTo(t)
+
+CompleteTurn(t) ==
+  /\ CanComplete(t)
   /\ turnState' = [turnState EXCEPT ![t] = "completed"]
   /\ settlementCount' = [settlementCount EXCEPT ![t] = Inc(@)]
   /\ reservation' = [reservation EXCEPT ![t] = "finalized"]
@@ -453,8 +473,7 @@ CompleteTurn(t) ==
     finalizerOwner, finalizerAborted, admittedDuringDrain, clientRetry, retryBackoff >>
 
 ClaimCompletedDelivery(t) ==
-  /\ turnState[t] \in {"active", "streaming"}
-  /\ UpstreamRespondsTo(t)
+  /\ CanComplete(t)
   /\ turnReplica[t] \in Replicas
   /\ turnState' = [turnState EXCEPT ![t] = "completed_delivery_claimed"]
   /\ poppedFromPending' = [poppedFromPending EXCEPT ![t] = TRUE]
@@ -657,6 +676,7 @@ RouteFromSnapshot(t, r, a) ==
   /\ turnState[t] = "queued"
   /\ r \in Replicas
   /\ a \in Accounts
+  /\ ~snapshotRouteAttempted[t]
   /\ (snapshotVersion[r][a] >= durableVersion[a] \/ WeakStaleCache)
   /\ snapshotRouteAttempted' = [snapshotRouteAttempted EXCEPT ![t] = TRUE]
   /\ routedWithStaleSnapshot' = [routedWithStaleSnapshot EXCEPT ![t] =
@@ -885,7 +905,7 @@ Inv11PreResponseBudget ==
   /\ \A t \in Turns :
        turnState[t] = "active" =>
          /\ preResponseDeadline[t] = Min2(Min2(gateRetireDeadline[t], ClientSafePreResponseCap), requestDeadline[t])
-         /\ preResponseDeadline[t] >= KeepaliveCadenceFloor
+         /\ preResponseDeadline[t] >= Min2(KeepaliveCadenceFloor, requestDeadline[t])
          /\ preResponseDeadline[t] <= requestDeadline[t]
   /\ mislabeledKill = FALSE
 
