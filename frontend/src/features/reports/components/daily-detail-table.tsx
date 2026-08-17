@@ -16,7 +16,7 @@ export type DailyDetailTableProps = {
 
 const DAILY_BREAKDOWN_SCROLL_HEIGHT_CLASS = "max-h-[17.5rem]";
 
-type SortKey = "date" | "requests" | "conversations" | "inputTokens" | "outputTokens" | "costUsd" | "activeAccounts";
+type SortKey = "date" | "requests" | "conversations" | "inputTokens" | "outputTokens" | "reasoningTokens" | "costUsd" | "activeAccounts";
 type SortDirection = "asc" | "desc";
 
 function formatTokens(v: number): string {
@@ -59,7 +59,7 @@ export function DailyDetailTable({ startDate, endDate, data }: DailyDetailTableP
         </Button>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full table-fixed text-xs min-w-[700px]">
+        <table className="w-full table-fixed text-xs min-w-[800px]">
           <ColumnGroup />
           <thead>
             <tr className="border-b text-left text-muted-foreground">
@@ -95,6 +95,12 @@ export function DailyDetailTable({ startDate, endDate, data }: DailyDetailTableP
                 onClick={() => toggleSort("outputTokens")}
               />
               <SortableHeader
+                label={t("reports.dailyBreakdown.columns.reasoningTokens")}
+                isActive={sort.key === "reasoningTokens"}
+                direction={sort.direction}
+                onClick={() => toggleSort("reasoningTokens")}
+              />
+              <SortableHeader
                 label={t("reports.dailyBreakdown.columns.cost")}
                 isActive={sort.key === "costUsd"}
                 direction={sort.direction}
@@ -113,7 +119,7 @@ export function DailyDetailTable({ startDate, endDate, data }: DailyDetailTableP
           data-testid="daily-breakdown-scroll-body"
           className={`${DAILY_BREAKDOWN_SCROLL_HEIGHT_CLASS} overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`}
         >
-          <table className="w-full table-fixed text-xs min-w-[700px]">
+          <table className="w-full table-fixed text-xs min-w-[800px]">
             <ColumnGroup />
             <tbody>
               {rows.map((row) => (
@@ -139,6 +145,9 @@ export function DailyDetailTable({ startDate, endDate, data }: DailyDetailTableP
                   </td>
                   <td className="py-2.5 pr-4 text-right text-foreground">
                     {formatTokens(row.outputTokens)}
+                  </td>
+                  <td className="py-2.5 pr-4 text-right text-foreground">
+                    {row.reasoningTokens == null ? "—" : formatTokens(row.reasoningTokens)}
                   </td>
                   <td className="py-2.5 pr-4 text-right font-medium text-emerald-600 dark:text-emerald-400">
                     ${row.costUsd.toFixed(2)}
@@ -201,13 +210,14 @@ function SortableHeader({
 function ColumnGroup() {
   return (
     <colgroup>
-      <col style={{ width: "16%" }} />
-      <col style={{ width: "12%" }} />
-      <col style={{ width: "12%" }} />
-      <col style={{ width: "16%" }} />
-      <col style={{ width: "16%" }} />
+      <col style={{ width: "15%" }} />
+      <col style={{ width: "10%" }} />
+      <col style={{ width: "11%" }} />
+      <col style={{ width: "15%" }} />
+      <col style={{ width: "15%" }} />
       <col style={{ width: "14%" }} />
-      <col style={{ width: "14%" }} />
+      <col style={{ width: "10%" }} />
+      <col style={{ width: "10%" }} />
     </colgroup>
   );
 }
@@ -220,6 +230,15 @@ function sortRows(
     const leftValue = left[sort.key];
     const rightValue = right[sort.key];
 
+    if (leftValue == null && rightValue == null) {
+      return 0;
+    }
+    if (leftValue == null) {
+      return 1;
+    }
+    if (rightValue == null) {
+      return -1;
+    }
     if (leftValue < rightValue) {
       return sort.direction === "asc" ? -1 : 1;
     }
@@ -239,13 +258,14 @@ function exportCSV(rows: DailyReportRow[], t: TFunction) {
     t("reports.dailyBreakdown.csvColumns.conversations"),
     t("reports.dailyBreakdown.csvColumns.inputTokens"),
     t("reports.dailyBreakdown.csvColumns.outputTokens"),
+    t("reports.dailyBreakdown.csvColumns.reasoningTokens"),
     t("reports.dailyBreakdown.csvColumns.cachedTokens"),
     t("reports.dailyBreakdown.csvColumns.costUsd"),
     t("reports.dailyBreakdown.csvColumns.activeAccounts"),
     t("reports.dailyBreakdown.csvColumns.errors"),
   ];
   const lines = rows.map((r) =>
-    [r.date, r.requests, r.conversations, r.inputTokens, r.outputTokens, r.cachedInputTokens, r.costUsd.toFixed(4), r.activeAccounts, r.errorCount].join(","),
+    [r.date, r.requests, r.conversations, r.inputTokens, r.outputTokens, r.reasoningTokens ?? "", r.cachedInputTokens, r.costUsd.toFixed(4), r.activeAccounts, r.errorCount].join(","),
   );
   const csv = [headers.join(","), ...lines].join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });

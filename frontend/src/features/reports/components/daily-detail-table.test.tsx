@@ -2,9 +2,33 @@ import userEvent from "@testing-library/user-event";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useDateDisplayFormatStore } from "@/hooks/use-date-format";
+import { buildContinuousDailyRows } from "../daily-series";
 import { formatReportBucketDate } from "../date";
+import type { DailyReportRow } from "../schemas";
 
-import { DailyDetailTable } from "./daily-detail-table";
+import {
+  DailyDetailTable as DailyDetailTableImpl,
+  type DailyDetailTableProps,
+} from "./daily-detail-table";
+
+type DailyDetailTableFixtureRow = Omit<
+  DailyReportRow,
+  "reasoningTokens"
+> & {
+  reasoningTokens?: number | null;
+};
+
+function DailyDetailTable({
+  data,
+  ...props
+}: Omit<DailyDetailTableProps, "data"> & { data: DailyDetailTableFixtureRow[] }) {
+  return (
+    <DailyDetailTableImpl
+      {...props}
+      data={data.map((row) => ({ reasoningTokens: 0, ...row }))}
+    />
+  );
+}
 
 beforeEach(() => {
   useDateDisplayFormatStore.setState({ dateDisplayFormat: "default" });
@@ -96,6 +120,28 @@ describe("DailyDetailTable", () => {
     expect(screen.getByTestId("daily-breakdown-scroll-body")).toHaveClass(
       "overflow-y-auto",
     );
+  });
+
+  it("zero-fills reasoning tokens for dates missing from the response", () => {
+    const rows = buildContinuousDailyRows("2026-06-05", "2026-06-06", [
+      {
+        date: "2026-06-05",
+        requests: 4,
+        conversations: 0,
+        inputTokens: 100,
+        outputTokens: 20,
+        reasoningTokens: 12,
+        cachedInputTokens: 0,
+        costUsd: 1,
+        activeAccounts: 1,
+        errorCount: 1,
+      },
+    ]);
+
+    expect(rows[0]?.reasoningTokens).toBe(12);
+    expect(rows[1]?.reasoningTokens).toBe(0);
+    expect(rows[0]?.requests).toBe(4);
+    expect(rows[0]?.errorCount).toBe(1);
   });
 
   it("renders existing rows when a date bound is cleared", () => {
@@ -254,6 +300,7 @@ describe("DailyDetailTable", () => {
             conversations: 0,
             inputTokens: 100,
             outputTokens: 20,
+            reasoningTokens: 12,
             cachedInputTokens: 1,
             costUsd: 1,
             activeAccounts: 3,
@@ -293,12 +340,95 @@ describe("DailyDetailTable", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:daily-breakdown");
     await expect(blobText()).resolves.toBe(
       [
-        "Date,Requests,Conversations,Input Tokens,Output Tokens,Cached Tokens,Cost USD,Active Accounts,Errors",
-        "2026-06-05,8,0,100,20,1,1.0000,3,0",
-        "2026-06-06,2,0,200,30,2,2.0000,1,0",
-        "2026-06-07,5,0,300,40,3,3.0000,2,0",
+        "Date,Requests,Conversations,Input Tokens,Output Tokens,Reported Reasoning Tokens,Cached Tokens,Cost USD,Active Accounts,Errors",
+        "2026-06-05,8,0,100,20,12,1,1.0000,3,0",
+        "2026-06-06,2,0,200,30,0,2,2.0000,1,0",
+        "2026-06-07,5,0,300,40,0,3,3.0000,2,0",
       ].join("\n"),
     );
+  });
+
+  it("renders and exports unknown reasoning separately from known zero and sorts unknown last", async () => {
+    const user = userEvent.setup();
+    const blobText = vi.fn(async () => "");
+    vi.spyOn(URL, "createObjectURL").mockImplementation((blob) => {
+      if (!(blob instanceof Blob)) {
+        throw new TypeError("expected Blob export payload");
+      }
+      blobText.mockImplementation(() => blob.text());
+      return "blob:nullable-reasoning";
+    });
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    render(
+      <DailyDetailTable
+        startDate="2026-06-05"
+        endDate="2026-06-07"
+        data={[
+          {
+            date: "2026-06-05",
+            requests: 1,
+            conversations: 0,
+            inputTokens: 100,
+            outputTokens: 20,
+            reasoningTokens: null,
+            cachedInputTokens: 0,
+            costUsd: 1,
+            activeAccounts: 1,
+            errorCount: 0,
+          },
+          {
+            date: "2026-06-06",
+            requests: 2,
+            conversations: 0,
+            inputTokens: 200,
+            outputTokens: 30,
+            reasoningTokens: 0,
+            cachedInputTokens: 0,
+            costUsd: 2,
+            activeAccounts: 1,
+            errorCount: 0,
+          },
+          {
+            date: "2026-06-07",
+            requests: 3,
+            conversations: 0,
+            inputTokens: 300,
+            outputTokens: 40,
+            reasoningTokens: 5,
+            cachedInputTokens: 0,
+            costUsd: 3,
+            activeAccounts: 1,
+            errorCount: 0,
+          },
+        ]}
+      />,
+    );
+
+    const unknownCells = screen
+      .getByTestId("daily-breakdown-row-2026-06-05")
+      .querySelectorAll("td");
+    const zeroCells = screen
+      .getByTestId("daily-breakdown-row-2026-06-06")
+      .querySelectorAll("td");
+    expect(unknownCells[5]?.textContent?.trim()).toBe("—");
+    expect(zeroCells[5]?.textContent?.trim()).toBe("0");
+
+    await user.click(screen.getByRole("button", { name: "Reported Reasoning Tokens" }));
+    expect(
+      screen.getAllByTestId(/daily-breakdown-row-/).map((row) => row.dataset.testid),
+    ).toEqual([
+      "daily-breakdown-row-2026-06-06",
+      "daily-breakdown-row-2026-06-07",
+      "daily-breakdown-row-2026-06-05",
+    ]);
+
+    await user.click(screen.getByRole("button", { name: /csv/i }));
+    const csvLines = (await blobText()).split("\n");
+    expect(csvLines[1]?.split(",")[5]).toBe("");
+    expect(csvLines[2]?.split(",")[5]).toBe("0");
+    expect(csvLines[3]?.split(",")[5]).toBe("5");
   });
 
   it.each([
@@ -306,6 +436,7 @@ describe("DailyDetailTable", () => {
     ["Reqs", "daily-breakdown-row-2026-06-06"],
     ["Input Tokens", "daily-breakdown-row-2026-06-05"],
     ["Output Tokens", "daily-breakdown-row-2026-06-05"],
+    ["Reported Reasoning Tokens", "daily-breakdown-row-2026-06-06"],
     ["Cost", "daily-breakdown-row-2026-06-05"],
     ["Accounts", "daily-breakdown-row-2026-06-06"],
   ])("sorts by %s when its header is clicked", async (headerLabel, expectedFirstRow) => {
@@ -323,6 +454,7 @@ describe("DailyDetailTable", () => {
             conversations: 0,
             inputTokens: 100,
             outputTokens: 20,
+            reasoningTokens: 5,
             cachedInputTokens: 0,
             costUsd: 1,
             activeAccounts: 3,
@@ -334,6 +466,7 @@ describe("DailyDetailTable", () => {
             conversations: 0,
             inputTokens: 200,
             outputTokens: 30,
+            reasoningTokens: 1,
             cachedInputTokens: 0,
             costUsd: 2,
             activeAccounts: 1,
@@ -345,6 +478,7 @@ describe("DailyDetailTable", () => {
             conversations: 0,
             inputTokens: 300,
             outputTokens: 40,
+            reasoningTokens: 3,
             cachedInputTokens: 0,
             costUsd: 3,
             activeAccounts: 2,
@@ -530,15 +664,15 @@ describe("DailyDetailTable", () => {
     const headerRow = screen.getAllByRole("row")[0];
     const headerCells = Array.from(headerRow?.querySelectorAll("th") ?? []);
     const labels = headerCells.map((c) => c.textContent?.trim() ?? "");
-    expect(labels).toEqual(["Day", "Reqs", "Conversations", "Input Tokens", "Output Tokens", "Cost", "Accounts"]);
+    expect(labels).toEqual(["Day", "Reqs", "Conversations", "Input Tokens", "Output Tokens", "Reported Reasoning Tokens", "Cost", "Accounts"]);
 
     // CSV: full header + first data row with Conversations between Requests and Input Tokens
     await user.click(screen.getByRole("button", { name: /csv/i }));
     const csv = await blobText();
     const csvLines = csv.split("\n");
-    expect(csvLines[0]).toBe("Date,Requests,Conversations,Input Tokens,Output Tokens,Cached Tokens,Cost USD,Active Accounts,Errors");
+    expect(csvLines[0]).toBe("Date,Requests,Conversations,Input Tokens,Output Tokens,Reported Reasoning Tokens,Cached Tokens,Cost USD,Active Accounts,Errors");
     // First data row in CSV (chronological: 06-05 first, conversations=1)
-    expect(csvLines[1]).toMatch(/2026-06-05,8,1,100,20,0,1\.0000,1,0/);
+    expect(csvLines[1]).toMatch(/2026-06-05,8,1,100,20,0,0,1\.0000,1,0/);
   });
 
   it("zero-filled gap rows have conversations=0 in column 2", () => {
@@ -572,7 +706,7 @@ describe("DailyDetailTable", () => {
       />,
     );
 
-    const tables = document.querySelectorAll("table.min-w-\\[700px\\]");
+    const tables = document.querySelectorAll("table.min-w-\\[800px\\]");
     expect(tables.length).toBe(2);
   });
 });

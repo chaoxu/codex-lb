@@ -33,6 +33,11 @@ export function ReportsSummaryCards({ summary, comparison }: ReportsSummaryCards
         cache: formatNumber(summary.totalCachedTokens),
         output: formatNumber(summary.totalOutputTokens),
       }),
+      secondarySub: t("reports.summary.reasoningSub", {
+        reasoning: formatNumber(summary.totalReasoningTokens),
+        known: summary.reasoningUsageKnownRequests,
+        total: summary.totalRequests,
+      }),
       comparison: buildComparison(
         summary.totalInputTokens + summary.totalOutputTokens,
         comparison.previous.totalTokens,
@@ -78,6 +83,9 @@ export function ReportsSummaryCards({ summary, comparison }: ReportsSummaryCards
             ) : null}
           </div>
           {card.sub ? <div className="mt-0.5 text-xs text-muted-foreground">{card.sub}</div> : null}
+          {"secondarySub" in card && card.secondarySub ? (
+            <div className="text-xs text-muted-foreground">{card.secondarySub}</div>
+          ) : null}
         </div>
       ))}
     </div>

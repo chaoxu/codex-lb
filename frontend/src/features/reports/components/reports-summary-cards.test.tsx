@@ -2,7 +2,35 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { ReportsSummaryCards } from "./reports-summary-cards";
+import type { ReportSummary } from "../schemas";
+import {
+  ReportsSummaryCards as ReportsSummaryCardsImpl,
+  type ReportsSummaryCardsProps,
+} from "./reports-summary-cards";
+
+type ReportsSummaryFixture = Omit<
+  ReportSummary,
+  "totalReasoningTokens" | "reasoningUsageKnownRequests"
+> & {
+  totalReasoningTokens?: number;
+  reasoningUsageKnownRequests?: number;
+};
+
+function ReportsSummaryCards({
+  summary,
+  ...props
+}: Omit<ReportsSummaryCardsProps, "summary"> & { summary: ReportsSummaryFixture }) {
+  return (
+    <ReportsSummaryCardsImpl
+      {...props}
+      summary={{
+        totalReasoningTokens: 0,
+        reasoningUsageKnownRequests: 0,
+        ...summary,
+      }}
+    />
+  );
+}
 
 describe("ReportsSummaryCards", () => {
   it("renders inline comparison badges for cost, tokens, and requests", () => {
@@ -12,6 +40,8 @@ describe("ReportsSummaryCards", () => {
           totalCostUsd: 15,
           totalInputTokens: 1_600_000_000,
           totalOutputTokens: 13_000_000,
+          totalReasoningTokens: 8_000_000,
+          reasoningUsageKnownRequests: 1400,
           totalCachedTokens: 990_000_000,
           totalRequests: 1500,
           totalErrors: 0,
@@ -50,9 +80,47 @@ describe("ReportsSummaryCards", () => {
     );
 
     expect(
-      within(tokensCard).getByText("Input 1.6B · Cache 990M · Output 13.0M"),
+      within(tokensCard).getByText(
+        "Input 1.6B · Cache 990M · Output 13.0M",
+      ),
     ).toBeInTheDocument();
+    expect(within(tokensCard).getByText("Reported reasoning 8.0M of output · 1400/1500 requests")).toBeInTheDocument();
     expect(within(requestsCard).getByText("avg 500/day · 3 accounts")).toBeInTheDocument();
+  });
+
+  it("shows reported reasoning coverage without adding reasoning to the token total", () => {
+    render(
+      <ReportsSummaryCards
+        summary={{
+          totalCostUsd: 1,
+          totalInputTokens: 100,
+          totalOutputTokens: 40,
+          totalReasoningTokens: 30,
+          reasoningUsageKnownRequests: 2,
+          totalCachedTokens: 10,
+          totalRequests: 4,
+          totalErrors: 0,
+          totalConversations: 1,
+          activeAccounts: 1,
+          avgCostPerDay: 1,
+          avgRequestsPerDay: 4,
+        }}
+        comparison={{
+          canCompare: false,
+          previous: { totalCostUsd: 0, totalTokens: 0, totalRequests: 0 },
+        }}
+      />,
+    );
+
+    const tokensCard = screen.getByTestId("report-summary-card-tokens");
+    expect(within(tokensCard).getByText("140")).toBeInTheDocument();
+    expect(
+      within(tokensCard).getByText(
+        "Input 100 · Cache 10 · Output 40",
+      ),
+    ).toBeInTheDocument();
+    expect(within(tokensCard).getByText("Reported reasoning 30 of output · 2/4 requests")).toBeInTheDocument();
+    expect(within(tokensCard).queryByText("170")).not.toBeInTheDocument();
   });
 
   it("hides comparison badges when unavailable or previous totals are zero", () => {
@@ -195,7 +263,12 @@ describe("ReportsSummaryCards", () => {
     const requestsCard = screen.getByTestId("report-summary-card-requests");
 
     expect(within(tokensCard).getByText("100.0B")).toBeInTheDocument();
-    expect(within(tokensCard).getByText("Input 100.0B · Cache 0 · Output 0")).toBeInTheDocument();
+    expect(
+      within(tokensCard).getByText(
+        "Input 100.0B · Cache 0 · Output 0",
+      ),
+    ).toBeInTheDocument();
+    expect(within(tokensCard).getByText("Reported reasoning 0 of output · 0/100000 requests")).toBeInTheDocument();
     expect(within(requestsCard).getByText("100.0K")).toBeInTheDocument();
   });
 });

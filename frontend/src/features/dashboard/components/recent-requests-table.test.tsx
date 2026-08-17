@@ -48,6 +48,40 @@ const PAGINATION_PROPS = {
   onOffsetChange: vi.fn(),
 };
 
+const REASONING_REQUEST = {
+  requestedAt: ISO,
+  accountId: "acc-usage",
+  planType: "plus",
+  apiKeyName: "Key Usage",
+  apiKeyId: "key-usage",
+  requestId: "req-reasoning",
+  conversationId: null,
+  requestKind: "normal",
+  model: "gpt-5.1",
+  source: null,
+  serviceTier: null,
+  requestedServiceTier: null,
+  actualServiceTier: null,
+  transport: "http",
+  ...NULL_USERAGENT_METADATA,
+  status: "ok",
+  errorCode: null,
+  errorMessage: null,
+  ...NULL_FAILURE_METADATA,
+  tokens: 1200,
+  inputTokens: 1000,
+  outputTokens: 200,
+  outputTokensRaw: 200,
+  reasoningTokens: null,
+  cachedInputTokens: 0,
+  reasoningEffort: null,
+  costUsd: 0,
+  costBreakdown: null,
+  latencyMs: 1000,
+  latencyFirstTokenMs: 200,
+  latencyQueueMs: null,
+} as const;
+
 function openRequestDetails() {
   fireEvent.click(screen.getByRole("button", { name: "View Details" }));
   return screen.getByRole("dialog");
@@ -229,6 +263,76 @@ describe("RecentRequestsTable", () => {
     expect(row).not.toBeNull();
     expect(within(row as HTMLElement).getByText("200ms")).toBeInTheDocument();
     expect(within(row as HTMLElement).getByText("200.0")).toBeInTheDocument();
+  });
+
+  it("shows reasoning as secondary token metadata and an included-output detail", () => {
+    render(
+      <RecentRequestsTable
+        {...PAGINATION_PROPS}
+        accounts={[]}
+        requests={[
+          {
+            ...REASONING_REQUEST,
+            requestId: "req-reasoning",
+            reasoningTokens: 80,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("1.2K")).toBeInTheDocument();
+    expect(screen.getByText("80 reasoning")).toBeInTheDocument();
+
+    const dialog = openRequestDetails();
+    const reasoningLabel = within(dialog).getByText(
+      "Reasoning tokens (included in output)",
+    );
+    expect(reasoningLabel.parentElement?.parentElement).toHaveTextContent("80");
+  });
+
+  it("renders a known zero reasoning count", () => {
+    render(
+      <RecentRequestsTable
+        {...PAGINATION_PROPS}
+        accounts={[]}
+        requests={[
+          {
+            ...REASONING_REQUEST,
+            requestId: "req-zero-reasoning",
+            reasoningTokens: 0,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("0 reasoning")).toBeInTheDocument();
+    const dialog = openRequestDetails();
+    const reasoningLabel = within(dialog).getByText(
+      "Reasoning tokens (included in output)",
+    );
+    expect(reasoningLabel.parentElement?.parentElement).toHaveTextContent("0");
+  });
+
+  it("omits unknown reasoning usage instead of estimating it", () => {
+    render(
+      <RecentRequestsTable
+        {...PAGINATION_PROPS}
+        accounts={[]}
+        requests={[
+          {
+            ...REASONING_REQUEST,
+            requestId: "req-unknown-reasoning",
+            reasoningTokens: null,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByText(/reasoning/i)).not.toBeInTheDocument();
+    const dialog = openRequestDetails();
+    expect(
+      within(dialog).queryByText("Reasoning tokens (included in output)"),
+    ).not.toBeInTheDocument();
   });
 
   it("does not calculate TPS from fallback output tokens", () => {
