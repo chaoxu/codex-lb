@@ -1005,7 +1005,12 @@ class _StreamingMixin(_StreamingRetryMixin):
         except _TerminalStreamError:
             raise
         except (asyncio.CancelledError, GeneratorExit):
-            status, error_code, error_message, failure_metadata = _mark_downstream_stream_cancelled(settlement)
+            # A client that closes right after receiving the terminal SSE event
+            # cancels this generator while it is still draining upstream EOF;
+            # the turn already completed and its usage was captured, so only an
+            # actually-interrupted stream settles as cancelled.
+            if not terminal_event_seen:
+                status, error_code, error_message, failure_metadata = _mark_downstream_stream_cancelled(settlement)
             raise
         except Exception:
             if settlement.downstream_visible:
