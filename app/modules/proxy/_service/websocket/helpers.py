@@ -419,6 +419,8 @@ def _websocket_continuity_anchor_for_payload(
 ) -> _WebSocketContinuityAnchor | None:
     if continuity_state is None or not codex_session_affinity:
         return None
+    if not _facade().get_settings().websocket_session_anchor_enabled:
+        return None
     if responses_payload.previous_response_id is not None:
         return None
     previous_response_id = continuity_state.last_completed_response_id

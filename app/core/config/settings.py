@@ -292,6 +292,12 @@ class Settings(BaseSettings):
     warmup_model: str = "gpt-5.4-mini"
     openai_prompt_cache_key_derivation_enabled: bool = True
     http_responses_session_bridge_enabled: bool = True
+    # Kill-switch for the WebSocket-transport compact-anchor injection
+    # (websocket_session_anchor_injected). Stored anchors can go stale
+    # (account failover, upstream retention) and an upstream 400 never
+    # invalidates them, wedging the session; disabling falls back to
+    # full-history resend, matching stateless HTTP forwarding.
+    websocket_session_anchor_enabled: bool = True
     http_responses_session_bridge_request_budget_seconds: float = Field(default=7200.0, gt=0)
     http_responses_session_bridge_idle_ttl_seconds: float = Field(default=120.0, gt=0)
     http_responses_session_bridge_codex_idle_ttl_seconds: float = Field(default=900.0, gt=0)
