@@ -958,6 +958,7 @@ class ProxyService(
         self._http_bridge_lock = anyio.Lock()
         self._work_admission: WorkAdmissionController | None = None
         self._request_log_tasks: set[asyncio.Task[None]] = set()
+        self._request_log_persistence_failed = False
 
     def _get_work_admission(self) -> WorkAdmissionController:
         if self._work_admission is None:

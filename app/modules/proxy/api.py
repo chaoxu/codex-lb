@@ -1485,10 +1485,11 @@ async def v1_usage(
             raise HTTPException(status_code=400, detail="since must be earlier than until")
         if until_utc - since_utc > timedelta(days=31):
             raise HTTPException(status_code=400, detail="usage window cannot exceed 31 days")
-        if not await context.service.drain_persistence_tasks(
+        drained = await context.service.drain_persistence_tasks(
             timeout_seconds=10,
             task_name_prefixes=("proxy-request-log-",),
-        ):
+        )
+        if not drained or context.service.request_log_persistence_failed:
             raise HTTPException(status_code=503, detail="request usage is still settling; retry the query")
         async with get_background_session() as session:
             usage = await ApiKeysRepository(session).get_usage_window(

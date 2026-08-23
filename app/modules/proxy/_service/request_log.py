@@ -64,6 +64,7 @@ class _RequestLogServiceProtocol(Protocol):
     _repo_factory: ProxyRepoFactory
     _request_log_tasks: set[asyncio.Task[None]]
     _background_cleanup_tasks: set[asyncio.Task[None]]
+    _request_log_persistence_failed: bool
 
 
 def _normalize_session_id(session_id: str | None) -> str | None:
@@ -74,6 +75,11 @@ def _normalize_session_id(session_id: str | None) -> str | None:
 
 
 class _RequestLogMixin:
+    @property
+    def request_log_persistence_failed(self) -> bool:
+        """Whether any request log failed to become durable in this process."""
+        return cast(_RequestLogServiceProtocol, self)._request_log_persistence_failed
+
     async def rewrite_request_log_model(self, request_id: str, model: str) -> None:
         """Override the ``model`` field on any ``request_logs`` row that
         matches ``request_id``.
@@ -482,6 +488,7 @@ class _RequestLogMixin:
                     client_ip=client_ip,
                 )
         except Exception:
+            proxy._request_log_persistence_failed = True
             logger.warning(
                 "Failed to persist request log account_id=%s request_id=%s",
                 account_id,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -455,6 +456,92 @@ async def test_v1_usage_window_refuses_an_unsettled_snapshot(async_client, app_i
         params={
             "since": "2026-08-23T00:00:00Z",
             "until": "2026-08-23T01:00:00Z",
+        },
+        headers={"Authorization": f"Bearer {plain_key}"},
+    )
+
+    assert response.status_code == 503
+    assert "still settling" in response.json()["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_v1_usage_window_waits_for_a_real_detached_insert(async_client, app_instance, monkeypatch):
+    key_id, plain_key = await _create_api_key(name="detached-window-key")
+    async with SessionLocal() as session:
+        api_key = await ApiKeysService(ApiKeysRepository(session)).get_key_by_id(key_id)
+    from app.dependencies import get_proxy_service_for_app
+
+    service = get_proxy_service_for_app(app_instance)
+    original_add_log = RequestLogsRepository.add_log
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def gated_add_log(self, *args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await original_add_log(self, *args, **kwargs)
+
+    monkeypatch.setattr(RequestLogsRepository, "add_log", gated_add_log)
+    since = utcnow() - timedelta(minutes=1)
+    await service._write_request_log(
+        account_id=None,
+        api_key=api_key,
+        request_id="req_detached_window",
+        model="gpt-5.6-sol",
+        latency_ms=10,
+        status="success",
+        input_tokens=100,
+        output_tokens=20,
+    )
+    await entered.wait()
+    query = asyncio.create_task(
+        async_client.get(
+            "/v1/usage",
+            params={
+                "since": since.isoformat() + "Z",
+                "until": (utcnow() + timedelta(minutes=1)).isoformat() + "Z",
+            },
+            headers={"Authorization": f"Bearer {plain_key}"},
+        )
+    )
+    await asyncio.sleep(0)
+    assert not query.done()
+    release.set()
+    response = await query
+
+    assert response.status_code == 200
+    assert response.json()["request_count"] == 1
+    assert response.json()["total_tokens"] == 120
+
+
+@pytest.mark.asyncio
+async def test_v1_usage_window_refuses_a_failed_detached_insert(async_client, app_instance, monkeypatch):
+    key_id, plain_key = await _create_api_key(name="failed-window-key")
+    async with SessionLocal() as session:
+        api_key = await ApiKeysService(ApiKeysRepository(session)).get_key_by_id(key_id)
+    from app.dependencies import get_proxy_service_for_app
+
+    service = get_proxy_service_for_app(app_instance)
+
+    async def failed_add_log(self, *args, **kwargs):
+        del self, args, kwargs
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(RequestLogsRepository, "add_log", failed_add_log)
+    await service._write_request_log(
+        account_id=None,
+        api_key=api_key,
+        request_id="req_failed_window",
+        model="gpt-5.6-sol",
+        latency_ms=10,
+        status="success",
+    )
+    assert await service.drain_persistence_tasks(timeout_seconds=5)
+    response = await async_client.get(
+        "/v1/usage",
+        params={
+            "since": (utcnow() - timedelta(minutes=1)).isoformat() + "Z",
+            "until": (utcnow() + timedelta(minutes=1)).isoformat() + "Z",
         },
         headers={"Authorization": f"Bearer {plain_key}"},
     )
