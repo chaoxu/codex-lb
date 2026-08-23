@@ -8,7 +8,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from json import JSONDecodeError
 from typing import Any, Final, Literal, Protocol, cast
 from uuid import uuid4
@@ -155,6 +155,7 @@ from app.core.utils.sse import (
     inject_sse_keepalives,
     parse_sse_data_json,
 )
+from app.core.utils.time import to_utc_naive
 from app.db.models import Account, AccountStatus, ModelSource
 from app.db.session import detach_session_objects, get_background_session
 from app.dependencies import ProxyContext, get_proxy_context, get_proxy_websocket_context
@@ -258,6 +259,7 @@ from app.modules.proxy.schemas import (
     V1ResetCreditRedeemResponse,
     V1UsageLimitResponse,
     V1UsageResponse,
+    V1UsageWindowResponse,
     WarmupFailedAccount,
     WarmupRequest,
     WarmupResponse,
@@ -1465,10 +1467,53 @@ async def v1_models(
     return await _build_models_response(api_key)
 
 
-@v1_router.get("/usage", response_model=V1UsageResponse)
+@v1_router.get("/usage", response_model=V1UsageResponse | V1UsageWindowResponse)
 async def v1_usage(
+    since: datetime | None = None,
+    until: datetime | None = None,
     api_key: ApiKeyData = Security(validate_usage_api_key),
-) -> V1UsageResponse | JSONResponse:
+    context: ProxyContext = Depends(get_proxy_context),
+) -> V1UsageResponse | V1UsageWindowResponse | JSONResponse:
+    if (since is None) != (until is None):
+        raise HTTPException(status_code=400, detail="since and until must be supplied together")
+    if since is not None and until is not None:
+        if since.utcoffset() is None or until.utcoffset() is None:
+            raise HTTPException(status_code=400, detail="since and until must include a timezone")
+        since_utc = to_utc_naive(since)
+        until_utc = to_utc_naive(until)
+        if since_utc >= until_utc:
+            raise HTTPException(status_code=400, detail="since must be earlier than until")
+        if until_utc - since_utc > timedelta(days=31):
+            raise HTTPException(status_code=400, detail="usage window cannot exceed 31 days")
+        if not await context.service.drain_persistence_tasks(
+            timeout_seconds=10,
+            task_name_prefixes=("proxy-request-log-",),
+        ):
+            raise HTTPException(status_code=503, detail="request usage is still settling; retry the query")
+        async with get_background_session() as session:
+            usage = await ApiKeysRepository(session).get_usage_window(
+                api_key.id,
+                since=since_utc,
+                until=until_utc,
+            )
+        return V1UsageWindowResponse(
+            since=since.astimezone(timezone.utc),
+            until=until.astimezone(timezone.utc),
+            request_count=usage.request_count,
+            input_tokens=usage.input_tokens,
+            cached_input_tokens=usage.cached_input_tokens,
+            output_tokens=usage.output_tokens,
+            reasoning_tokens=usage.reasoning_tokens,
+            total_tokens=usage.total_tokens,
+            total_cost_usd=usage.total_cost_usd,
+            first_request_at=(
+                usage.first_request_at.replace(tzinfo=timezone.utc) if usage.first_request_at is not None else None
+            ),
+            last_request_at=(
+                usage.last_request_at.replace(tzinfo=timezone.utc) if usage.last_request_at is not None else None
+            ),
+            models=usage.models,
+        )
     usage_sections = _parse_usage_sections(api_key.usage_sections)
     async with get_background_session() as session:
         service = ApiKeysService(ApiKeysRepository(session), usage_repository=UsageRepository(session))

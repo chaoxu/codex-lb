@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime
 from typing import Protocol, cast
 
 import anyio
 
 from app.core.metrics.prometheus import PROMETHEUS_AVAILABLE, proxy_phase_latency_seconds
+from app.core.utils.time import utcnow
 from app.modules.api_keys.service import ApiKeyData
 from app.modules.proxy.affinity import _extract_model_class
 from app.modules.proxy.repo_bundle import ProxyRepoFactory
@@ -196,11 +198,13 @@ class _RequestLogMixin:
         client_ip: str | None = None,
         archive_request_id: str | None = None,
     ) -> None:
+        requested_at = utcnow()
         task = asyncio.create_task(
             self._persist_request_log(
                 account_id=account_id,
                 api_key_id=api_key.id if api_key else None,
                 request_id=request_id,
+                requested_at=requested_at,
                 archive_request_id=archive_request_id,
                 model=model,
                 latency_ms=latency_ms,
@@ -380,6 +384,7 @@ class _RequestLogMixin:
         account_id: str | None,
         api_key_id: str | None,
         request_id: str,
+        requested_at: datetime,
         archive_request_id: str | None,
         model: str | None,
         latency_ms: int,
@@ -432,6 +437,7 @@ class _RequestLogMixin:
                     api_key_id=api_key_id,
                     session_id=_normalize_session_id(session_id),
                     request_id=request_id,
+                    requested_at=requested_at,
                     archive_request_id=archive_request_id,
                     model=model or "",
                     input_tokens=input_tokens,

@@ -86,6 +86,20 @@ class ApiKeyUsageTotals:
 
 
 @dataclass(frozen=True, slots=True)
+class ApiKeyUsageWindow:
+    request_count: int
+    input_tokens: int
+    cached_input_tokens: int
+    output_tokens: int
+    reasoning_tokens: int
+    total_tokens: int
+    total_cost_usd: float
+    first_request_at: datetime | None
+    last_request_at: datetime | None
+    models: list[str]
+
+
+@dataclass(frozen=True, slots=True)
 class ApiKeyAccountCost:
     account_id: str | None
     email: str | None
@@ -252,6 +266,60 @@ class ApiKeysRepository:
         return summaries.get(
             key_id,
             ApiKeyUsageSummary(request_count=0, total_tokens=0, cached_input_tokens=0, total_cost_usd=0.0),
+        )
+
+    async def get_usage_window(
+        self,
+        key_id: str,
+        *,
+        since: datetime,
+        until: datetime,
+    ) -> ApiKeyUsageWindow:
+        """Aggregate one API key's normal requests in ``[since, until)``."""
+        conditions = (
+            RequestLog.api_key_id == key_id,
+            RequestLog.requested_at >= since,
+            RequestLog.requested_at < until,
+            self._exclude_warmup_clause(),
+        )
+        rows = (
+            await self._session.execute(
+                select(
+                    RequestLog.model,
+                    func.count(RequestLog.id),
+                    func.coalesce(func.sum(RequestLog.input_tokens), 0),
+                    func.coalesce(func.sum(RequestLog.cached_input_tokens), 0),
+                    func.coalesce(
+                        func.sum(func.coalesce(RequestLog.output_tokens, RequestLog.reasoning_tokens, 0)),
+                        0,
+                    ),
+                    func.coalesce(func.sum(RequestLog.reasoning_tokens), 0),
+                    func.coalesce(func.sum(RequestLog.cost_usd), 0.0),
+                    func.min(RequestLog.requested_at),
+                    func.max(RequestLog.requested_at),
+                )
+                .where(*conditions)
+                .group_by(RequestLog.model)
+                .order_by(RequestLog.model)
+            )
+        ).all()
+        input_tokens = sum(int(row[2] or 0) for row in rows)
+        cached_input_tokens = sum(max(0, min(int(row[3] or 0), int(row[2] or 0))) for row in rows)
+        output_tokens = sum(int(row[4] or 0) for row in rows)
+        reasoning_tokens = sum(max(0, min(int(row[5] or 0), int(row[4] or 0))) for row in rows)
+        first = [row[7] for row in rows if row[7] is not None]
+        last = [row[8] for row in rows if row[8] is not None]
+        return ApiKeyUsageWindow(
+            request_count=sum(int(row[1] or 0) for row in rows),
+            input_tokens=input_tokens,
+            cached_input_tokens=cached_input_tokens,
+            output_tokens=output_tokens,
+            reasoning_tokens=reasoning_tokens,
+            total_tokens=input_tokens + output_tokens,
+            total_cost_usd=round(sum(float(row[6] or 0.0) for row in rows), 6),
+            first_request_at=min(first) if first else None,
+            last_request_at=max(last) if last else None,
+            models=[str(row[0]) for row in rows if row[0]],
         )
 
     async def get_limit_usage_value(

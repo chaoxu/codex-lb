@@ -300,6 +300,170 @@ async def test_v1_usage_returns_zero_usage_for_key_without_logs(async_client):
 
 
 @pytest.mark.asyncio
+async def test_v1_usage_window_is_exact_and_scoped_to_bearer_key(async_client):
+    key_id, plain_key = await _create_api_key(name="window-key")
+    other_key_id, _ = await _create_api_key(name="window-other-key")
+    since = utcnow() - timedelta(minutes=10)
+    first = since
+    last = since + timedelta(minutes=2)
+    until = since + timedelta(minutes=5)
+
+    async with SessionLocal() as session:
+        logs = RequestLogsRepository(session)
+        common = {
+            "account_id": None,
+            "latency_ms": 10,
+            "status": "success",
+            "error_code": None,
+        }
+        await logs.add_log(
+            **common,
+            api_key_id=key_id,
+            request_id="req_window_first",
+            model="gpt-5.6-sol",
+            input_tokens=100,
+            output_tokens=30,
+            cached_input_tokens=40,
+            reasoning_tokens=20,
+            cost_usd=0.2,
+            requested_at=first,
+        )
+        retry_log = await logs.add_log(
+            **common,
+            api_key_id=key_id,
+            request_id="req_window_first",
+            model="gpt-5.6-terra",
+            input_tokens=50,
+            output_tokens=None,
+            cached_input_tokens=10,
+            reasoning_tokens=5,
+            cost_usd=0.1,
+            requested_at=last,
+        )
+        retry_log.deleted_at = last
+        await session.commit()
+        await logs.add_log(
+            **common,
+            api_key_id=other_key_id,
+            request_id="req_window_other_key",
+            model="gpt-5.6-sol",
+            input_tokens=999,
+            output_tokens=999,
+            cost_usd=9.0,
+            requested_at=last,
+        )
+        await logs.add_log(
+            **common,
+            api_key_id=key_id,
+            request_id="req_window_warmup",
+            request_kind="warmup",
+            model="gpt-5.6-sol",
+            input_tokens=777,
+            output_tokens=777,
+            cost_usd=7.0,
+            requested_at=last,
+        )
+        await logs.add_log(
+            **common,
+            api_key_id=key_id,
+            request_id="req_window_at_until",
+            model="gpt-5.6-sol",
+            input_tokens=888,
+            output_tokens=888,
+            cost_usd=8.0,
+            requested_at=until,
+        )
+
+    response = await async_client.get(
+        "/v1/usage",
+        params={"since": since.isoformat() + "Z", "until": until.isoformat() + "Z"},
+        headers={"Authorization": f"Bearer {plain_key}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["request_count"] == 2
+    assert payload["input_tokens"] == 150
+    assert payload["cached_input_tokens"] == 50
+    assert payload["output_tokens"] == 35
+    assert payload["reasoning_tokens"] == 25
+    assert payload["total_tokens"] == 185
+    assert payload["total_cost_usd"] == pytest.approx(0.3)
+    assert payload["first_request_at"] == first.isoformat() + "Z"
+    assert payload["last_request_at"] == last.isoformat() + "Z"
+    assert payload["models"] == ["gpt-5.6-sol", "gpt-5.6-terra"]
+    assert "limits" not in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"since": "2026-08-23T00:00:00Z"},
+        {"since": "2026-08-23T00:00:00", "until": "2026-08-23T01:00:00"},
+        {"since": "2026-08-23T01:00:00Z", "until": "2026-08-23T00:00:00Z"},
+        {"since": "2026-01-01T00:00:00Z", "until": "2026-03-01T00:00:00Z"},
+    ],
+)
+async def test_v1_usage_window_rejects_invalid_bounds(async_client, params):
+    _, plain_key = await _create_api_key(name="invalid-window-key")
+    response = await async_client.get(
+        "/v1/usage",
+        params=params,
+        headers={"Authorization": f"Bearer {plain_key}"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "invalid_request_error"
+
+
+@pytest.mark.asyncio
+async def test_v1_usage_window_accepts_offset_bounds_and_empty_interval(async_client):
+    _, plain_key = await _create_api_key(name="offset-window-key")
+    response = await async_client.get(
+        "/v1/usage",
+        params={
+            "since": "2026-08-22T17:00:00-07:00",
+            "until": "2026-08-22T18:00:00-07:00",
+        },
+        headers={"Authorization": f"Bearer {plain_key}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["request_count"] == 0
+    assert payload["total_tokens"] == 0
+    assert payload["models"] == []
+    assert payload["first_request_at"] is None
+    assert payload["last_request_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_v1_usage_window_refuses_an_unsettled_snapshot(async_client, app_instance, monkeypatch):
+    _, plain_key = await _create_api_key(name="unsettled-window-key")
+    from app.dependencies import get_proxy_service_for_app
+
+    service = get_proxy_service_for_app(app_instance)
+
+    async def not_drained(*args, **kwargs):
+        del args, kwargs
+        return False
+
+    monkeypatch.setattr(service, "drain_persistence_tasks", not_drained)
+    response = await async_client.get(
+        "/v1/usage",
+        params={
+            "since": "2026-08-23T00:00:00Z",
+            "until": "2026-08-23T01:00:00Z",
+        },
+        headers={"Authorization": f"Bearer {plain_key}"},
+    )
+
+    assert response.status_code == 503
+    assert "still settling" in response.json()["error"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_v1_usage_omits_disabled_account_pool_usage_section(async_client):
     _, plain_key = await _create_api_key(
         name="no-account-pool-usage",

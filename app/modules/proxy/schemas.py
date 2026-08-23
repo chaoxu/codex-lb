@@ -282,6 +282,23 @@ class V1UsageResponse(BaseModel):
     account_pool_usage: AccountPoolUsageResponse | None = None
 
 
+class V1UsageWindowResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    since: datetime
+    until: datetime
+    request_count: int
+    input_tokens: int
+    cached_input_tokens: int
+    output_tokens: int
+    reasoning_tokens: int
+    total_tokens: int
+    total_cost_usd: float
+    first_request_at: datetime | None = None
+    last_request_at: datetime | None = None
+    models: list[str]
+
+
 class V1ResetCreditEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

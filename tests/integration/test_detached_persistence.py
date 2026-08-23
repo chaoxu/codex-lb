@@ -268,6 +268,9 @@ async def test_image_model_rewrite_waits_for_detached_insert(raw_client, monkeyp
     from app.dependencies import get_proxy_service_for_app
 
     service = get_proxy_service_for_app(app)
+    from app.core.utils.time import utcnow
+
+    before_schedule = utcnow()
     await service._write_request_log(
         account_id=None,
         api_key=None,
@@ -276,6 +279,7 @@ async def test_image_model_rewrite_waits_for_detached_insert(raw_client, monkeyp
         latency_ms=5,
         status="success",
     )
+    after_schedule = utcnow()
 
     # The rewrite is itself detached persistence: calling it returns
     # immediately (image responses never wait on log durability) even while
@@ -298,6 +302,7 @@ async def test_image_model_rewrite_waits_for_detached_insert(raw_client, monkeyp
             .one()
         )
     assert row.model == "gpt-image-1"
+    assert before_schedule <= row.requested_at <= after_schedule
 
 
 @pytest.mark.asyncio
