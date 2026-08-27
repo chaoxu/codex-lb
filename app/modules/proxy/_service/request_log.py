@@ -195,11 +195,13 @@ class _RequestLogMixin:
         conversation_id: str | None = None,
         client_ip: str | None = None,
         archive_request_id: str | None = None,
+        usage_tag: str | None = None,
     ) -> None:
         task = asyncio.create_task(
             self._persist_request_log(
                 account_id=account_id,
                 api_key_id=api_key.id if api_key else None,
+                usage_tag=usage_tag,
                 request_id=request_id,
                 archive_request_id=archive_request_id,
                 model=model,
@@ -379,6 +381,7 @@ class _RequestLogMixin:
         *,
         account_id: str | None,
         api_key_id: str | None,
+        usage_tag: str | None,
         request_id: str,
         archive_request_id: str | None,
         model: str | None,
@@ -430,6 +433,7 @@ class _RequestLogMixin:
                 await repos.request_logs.add_log(
                     account_id=account_id,
                     api_key_id=api_key_id,
+                    usage_tag=usage_tag,
                     session_id=_normalize_session_id(session_id),
                     request_id=request_id,
                     archive_request_id=archive_request_id,
@@ -502,6 +506,7 @@ class _RequestLogMixin:
         useragent_group: str | None = None,
         conversation_id: str | None = None,
         client_ip: str | None = None,
+        usage_tag: str | None = None,
     ) -> None:
         await self._write_request_log(
             account_id=account_id,
@@ -522,4 +527,5 @@ class _RequestLogMixin:
             useragent_group=useragent_group,
             conversation_id=conversation_id,
             client_ip=client_ip,
+            usage_tag=usage_tag,
         )

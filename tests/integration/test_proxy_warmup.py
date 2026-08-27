@@ -163,7 +163,11 @@ async def test_warmup_normal_mode_uses_configured_model_and_logs_warmup_kind(asy
 
     response = await async_client.post(
         "/v1/warmup",
-        headers={"Authorization": f"Bearer {key}"},
+        headers={
+            "Authorization": f"Bearer {key}",
+            "X-Codex-LB-Usage-Tag": "warmup-v1/baseline/attempt-1",
+            "X-Codex-LB-Required-Capability": "usage_tag_v1",
+        },
         json={"mode": "normal"},
     )
 
@@ -188,7 +192,26 @@ async def test_warmup_normal_mode_uses_configured_model_and_logs_warmup_kind(asy
     assert len(rows) == 1
     assert rows[0].request_kind == "warmup"
     assert rows[0].model == "gpt-5.4-nano"
+    assert rows[0].usage_tag == "warmup-v1/baseline/attempt-1"
     assert limit.current_value == 0
+
+
+@pytest.mark.asyncio
+async def test_warmup_rejects_invalid_usage_tag_before_submission(async_client, monkeypatch):
+    eligible_id = await _import_account(async_client, "acc-warmup-invalid-tag", "warmup-invalid-tag@example.com")
+    await _add_primary_usage(eligible_id, used_percent=0.0, window_minutes=300)
+    captured_models: list[str] = []
+    _install_successful_warmup_stub(monkeypatch, captured_models)
+
+    response = await async_client.post(
+        "/v1/warmup",
+        headers={"X-Codex-LB-Usage-Tag": "invalid tag with spaces"},
+        json={"mode": "normal"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_usage_tag"
+    assert captured_models == []
 
 
 @pytest.mark.asyncio

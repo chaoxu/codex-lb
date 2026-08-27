@@ -30,6 +30,7 @@ from app.modules.proxy.http_bridge_forwarding import (
     HTTP_BRIDGE_SIGNATURE_V2_HEADER,
     HTTP_BRIDGE_SIGNATURE_VERSION_HEADER,
     HTTP_BRIDGE_TARGET_INSTANCE_HEADER,
+    HTTP_BRIDGE_USAGE_TAG_HEADER,
     HTTPBridgeForwardContext,
     HTTPBridgeOwnerClient,
     _bridge_forward_signature,
@@ -144,6 +145,78 @@ def test_parse_forwarded_request_preserves_signed_file_owner_proof() -> None:
     assert error is None
     assert forwarded is not None
     assert forwarded.context.file_owner_account_id == "acc-file-owner"
+
+
+def test_parse_forwarded_request_preserves_signed_usage_tag_without_raw_header() -> None:
+    payload = _payload()
+    context = HTTPBridgeForwardContext(
+        origin_instance="instance-a",
+        target_instance="instance-b",
+        codex_session_affinity=False,
+        downstream_turn_state=None,
+        usage_tag="guidance-v1/baseline--r02/attempt-1",
+    )
+    headers = build_owner_forward_headers(
+        headers={"X-Codex-LB-Usage-Tag": "client-spoofed"},
+        payload=payload,
+        context=context,
+    )
+
+    assert HTTP_BRIDGE_USAGE_TAG_HEADER in headers
+    assert "x-codex-lb-usage-tag" not in {key.lower() for key in headers}
+    forwarded, error = parse_forwarded_request(headers, payload=payload, current_instance="instance-b")
+
+    assert error is None
+    assert forwarded is not None
+    assert forwarded.context.usage_tag == "guidance-v1/baseline--r02/attempt-1"
+
+
+@pytest.mark.parametrize("downgrade", ["tamper", "strip_full_signature", "strip_tag_and_full_signature"])
+def test_parse_forwarded_request_rejects_unbound_usage_tag(downgrade: str) -> None:
+    payload = _payload()
+    context = HTTPBridgeForwardContext(
+        origin_instance="instance-a",
+        target_instance="instance-b",
+        codex_session_affinity=False,
+        downstream_turn_state=None,
+        usage_tag="guidance-v1/baseline--r02/attempt-1",
+    )
+    headers = build_owner_forward_headers(headers={}, payload=payload, context=context)
+    if downgrade == "tamper":
+        headers[HTTP_BRIDGE_USAGE_TAG_HEADER] = "guidance-v1/tampered/attempt-1"
+    elif downgrade == "strip_full_signature":
+        headers.pop(HTTP_BRIDGE_SIGNATURE_V2_HEADER)
+    else:
+        headers.pop(HTTP_BRIDGE_USAGE_TAG_HEADER)
+        headers.pop(HTTP_BRIDGE_SIGNATURE_V2_HEADER)
+
+    forwarded, error = parse_forwarded_request(headers, payload=payload, current_instance="instance-b")
+
+    assert forwarded is None
+    assert error is not None
+    assert error.payload["error"]["code"] == "bridge_forward_invalid"
+
+
+def test_usage_tag_changes_primary_signature_but_untagged_wire_format_remains_compatible() -> None:
+    payload = _payload()
+    untagged = HTTPBridgeForwardContext(
+        origin_instance="instance-a",
+        target_instance="instance-b",
+        codex_session_affinity=False,
+        downstream_turn_state=None,
+    )
+    tagged = HTTPBridgeForwardContext(
+        origin_instance="instance-a",
+        target_instance="instance-b",
+        codex_session_affinity=False,
+        downstream_turn_state=None,
+        usage_tag="guidance-v1/baseline--r02/attempt-1",
+    )
+
+    assert _bridge_forward_signature(payload=payload, context=tagged) != _bridge_forward_signature(
+        payload=payload,
+        context=untagged,
+    )
 
 
 @pytest.mark.parametrize("downgrade", ["tamper", "strip_full_signature"])

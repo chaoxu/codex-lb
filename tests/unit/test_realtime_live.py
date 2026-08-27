@@ -228,6 +228,26 @@ class _ProxyService(_RealtimeLiveMixin):
         return None
 
 
+@pytest.mark.asyncio
+async def test_live_sideband_rejects_invalid_usage_tag_before_account_selection() -> None:
+    lease = cast(AccountLease, object())
+    account = SimpleNamespace(id="account-a")
+    service = _ProxyService(account, lease)
+
+    with pytest.raises(ProxyResponseError) as raised:
+        await service.proxy_realtime_live_websocket(
+            cast(Any, _FakeDownstreamWebSocket()),
+            "rtc_example",
+            {"X-Codex-LB-Usage-Tag": "invalid tag with spaces"},
+            protocol=proxy_websocket_module.RealtimeWebSocketProtocol.LIVE_V3,
+            api_key=_unscoped_api_key(),
+        )
+
+    assert raised.value.payload["error"]["code"] == "invalid_usage_tag"
+    assert service.selection_calls == []
+    assert service._load_balancer.released == []
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [

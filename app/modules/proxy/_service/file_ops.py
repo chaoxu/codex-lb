@@ -31,6 +31,7 @@ from app.db.models import Account
 from app.modules.api_keys.service import ApiKeyData
 from app.modules.proxy._service.support import (
     _request_log_client_fields,
+    _request_log_usage_tag,
     _RequestLogFailureMetadata,
 )
 from app.modules.proxy.continuity import resolve_required_account_id
@@ -449,6 +450,7 @@ class _FileOpsMixin:
         proxy = cast(_FileOpsServiceProtocol, self)
         filtered = filter_inbound_headers(headers)
         useragent, useragent_group, conversation_id = _request_log_client_fields(headers)
+        usage_tag = _request_log_usage_tag(headers)
         request_id = get_request_id() or ensure_request_id(None)
         start = _service_time().monotonic()
         base_settings = _service_get_settings()
@@ -744,4 +746,5 @@ class _FileOpsMixin:
                 useragent=useragent,
                 useragent_group=useragent_group,
                 conversation_id=conversation_id,
+                usage_tag=usage_tag,
             )

@@ -28,7 +28,7 @@ from app.core.utils.time import utcnow
 from app.db.models import Account, AccountStatus, StickySessionKind
 from app.db.session import detach_session_objects
 from app.modules.api_keys.service import ApiKeyData
-from app.modules.proxy._service.support import _request_log_client_fields
+from app.modules.proxy._service.support import _request_log_client_fields, _request_log_usage_tag
 from app.modules.proxy.helpers import _header_account_id
 from app.modules.proxy.load_balancer import AccountLease, AccountSelection
 from app.modules.proxy.repo_bundle import ProxyRepoFactory
@@ -131,6 +131,7 @@ class _RealtimeLiveServiceProtocol(Protocol):
         upstream_proxy_endpoint_id: str | None,
         upstream_proxy_fallback_used: bool | None,
         upstream_proxy_fail_closed_reason: str | None,
+        usage_tag: str | None,
     ) -> None: ...
 
 
@@ -455,6 +456,8 @@ class _RealtimeLiveMixin:
                 400,
                 openai_error("invalid_realtime_call_id", "Invalid realtime call id"),
             )
+        useragent, useragent_group, conversation_id = _request_log_client_fields(headers)
+        usage_tag = _request_log_usage_tag(headers)
 
         proxy = cast(_RealtimeLiveServiceProtocol, self)
         owner_account_id = await self._resolve_realtime_call_owner(normalized_call_id, api_key=api_key)
@@ -500,7 +503,6 @@ class _RealtimeLiveMixin:
         upstream: UpstreamWebSocket | None = None
         relay_upstream: _CloseOnceLiveWebSocket | None = None
         log_status = "error"
-        useragent, useragent_group, conversation_id = _request_log_client_fields(headers)
         route: ResolvedUpstreamRoute | None = None
         try:
             # Account-selection inputs are intentionally cached for routing, but
@@ -627,6 +629,7 @@ class _RealtimeLiveMixin:
                     useragent_group=useragent_group,
                     client_ip=client_ip,
                     conversation_id=None,
+                    usage_tag=usage_tag,
                     upstream_proxy_route_mode=None,
                     upstream_proxy_pool_id=None,
                     upstream_proxy_endpoint_id=None,

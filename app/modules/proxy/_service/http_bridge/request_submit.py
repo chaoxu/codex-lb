@@ -158,6 +158,7 @@ from app.modules.proxy._service.support import (
     _HTTPBridgeRetryCircuitAttemptSelection,
     _HTTPBridgeSession,
     _request_log_client_fields,
+    _request_log_usage_tag,
     _websocket_request_can_replay_before_visible_output,
     _WebSocketRequestState,
 )
@@ -672,6 +673,7 @@ class _HTTPBridgeRequestSubmitMixin:
             reasoning_effort=payload.reasoning.effort if payload.reasoning else None,
             api_key_reservation=api_key_reservation,
             started_at=_service_time().monotonic(),
+            usage_tag=_request_log_usage_tag(headers or {}),
             requested_service_tier=forwarded_service_tier,
             awaiting_response_created=True,
             event_queue=asyncio.Queue() if attach_event_queue else None,

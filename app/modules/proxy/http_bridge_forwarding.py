@@ -60,6 +60,7 @@ HTTP_BRIDGE_ORIGINAL_UNANCHORED_HEADER = "x-codex-bridge-original-unanchored"
 HTTP_BRIDGE_SIGNATURE_VERSION_HEADER = "x-codex-bridge-signature-version"
 HTTP_BRIDGE_CLIENT_IP_HEADER = "x-codex-bridge-client-ip"
 HTTP_BRIDGE_CLIENT_IP_SIGNATURE_HEADER = "x-codex-bridge-client-ip-signature"
+HTTP_BRIDGE_USAGE_TAG_HEADER = "x-codex-bridge-usage-tag"
 HTTP_BRIDGE_SIGNATURE_HEADER = "x-codex-bridge-signature"
 # Additive tamper-proofing header (#1203): a second signature bound to the
 # exact forwarding body (``model_dump_for_forwarding``) that is posted, so an
@@ -86,6 +87,7 @@ class HTTPBridgeForwardContext:
     original_affinity_key: str | None = None
     file_owner_account_id: str | None = None
     client_ip: str | None = None
+    usage_tag: str | None = None
     reservation: ApiKeyUsageReservationData | None = None
     signature_version: str | None = None
 
@@ -271,6 +273,8 @@ def build_owner_forward_headers(
             include_client_ip=True,
             signature_version=signature_version,
         )
+    if context.usage_tag:
+        forwarded[HTTP_BRIDGE_USAGE_TAG_HEADER] = context.usage_tag
     if context.downstream_turn_state:
         forwarded["x-codex-turn-state"] = context.downstream_turn_state
     if context.reservation is not None:
@@ -278,12 +282,10 @@ def build_owner_forward_headers(
         forwarded[HTTP_BRIDGE_RESERVATION_KEY_ID_HEADER] = context.reservation.key_id
         forwarded[HTTP_BRIDGE_RESERVATION_MODEL_HEADER] = context.reservation.model
     # ROLLOUT SHIM (#1203, remove with HTTP_BRIDGE_SIGNATURE_V2_HEADER
-    # follow-up): keep sending the primary signature computed over the plain
-    # ``model_dump`` (with synthesized ``"tools": []``) so owners running code
-    # that predates the tamper-proofing header can still verify requests from
-    # updated origins during a rolling upgrade. New-code receivers verify the
-    # tamper-proofing header below first and fall back to this primary
-    # signature only when the tamper-proofing header does not validate.
+    # follow-up): untagged requests retain the deployed primary signature so
+    # old owners can verify them during a rolling upgrade. Tagged requests bind
+    # the tag into this fallback signature too; they fail closed on old owners
+    # instead of silently losing attribution.
     forwarded[HTTP_BRIDGE_SIGNATURE_HEADER] = _bridge_forward_signature(
         payload=payload,
         context=context,
@@ -348,6 +350,7 @@ def parse_forwarded_request(
         original_affinity_key=_optional_header(headers.get(HTTP_BRIDGE_AFFINITY_KEY_HEADER)),
         file_owner_account_id=_optional_header(headers.get(HTTP_BRIDGE_FILE_OWNER_HEADER)),
         client_ip=client_ip,
+        usage_tag=_optional_header(headers.get(HTTP_BRIDGE_USAGE_TAG_HEADER)),
         reservation=_reservation_from_headers(headers),
         signature_version=signature_version,
     )
@@ -372,7 +375,11 @@ def parse_forwarded_request(
     )
     if tools_bound_valid:
         return HTTPBridgeForwardedRequest(context=context), None
-    if context.file_owner_account_id is not None or extract_input_file_ids(payload.input):
+    if (
+        context.file_owner_account_id is not None
+        or context.usage_tag is not None
+        or extract_input_file_ids(payload.input)
+    ):
         # The rolling-upgrade primary signature does not bind the additive
         # file-owner proof. Never allow a stripped/forged proof to downgrade to
         # it, and never allow payloads with file references to fall back after a
@@ -501,9 +508,12 @@ def _bridge_forward_signature(
     from one with an injected explicit empty list; the tamper-proof binding
     lives in ``_bridge_forward_tools_bound_signature`` (#1203). This signature
     is retained for the unanchored/legacy wire contract and rolling-upgrade
-    fallback. ``signature_version is None`` uses the deployed legacy
-    delimiter-joined format; the versioned path uses a canonical structured
-    encoding whose object boundaries make field re-packing impossible.
+    fallback. Untagged requests remain byte-compatible with that contract.
+    Tagged requests bind ``usage_tag`` here so stripping the tag and V2
+    signature cannot downgrade to an accepted untagged request.
+    ``signature_version is None`` uses the deployed legacy delimiter-joined
+    format; the versioned path uses a canonical structured encoding whose
+    object boundaries make field re-packing impossible.
     """
     body_digest = _bridge_forward_body_digest(payload.model_dump(mode="json", exclude_none=True))
     if signature_version is None:
@@ -527,9 +537,11 @@ def _bridge_forward_signature(
                 context.reservation.reservation_id if context.reservation is not None else "",
                 context.reservation.key_id if context.reservation is not None else "",
                 context.reservation.model if context.reservation is not None else "",
-                body_digest,
             )
         )
+        if context.usage_tag is not None:
+            fields.append(context.usage_tag)
+        fields.append(body_digest)
         signing_payload = _LEGACY_SIGNATURE_DELIMITER.join(fields)
     else:
         signing_payload = _structured_bridge_signing_payload(
@@ -538,6 +550,7 @@ def _bridge_forward_signature(
             include_client_ip=include_client_ip,
             signature_version=signature_version,
             protocol="codex-lb-http-bridge-forward",
+            include_usage_tag=context.usage_tag is not None,
         )
     return _sign_bridge_payload(signing_payload)
 
@@ -569,6 +582,7 @@ def _bridge_forward_tools_bound_signature(
         include_client_ip=True,
         signature_version=signature_version,
         protocol="codex-lb-http-bridge-forward-tools-bound",
+        include_usage_tag=True,
     )
     return _sign_bridge_payload(signing_payload)
 
@@ -585,6 +599,7 @@ def _structured_bridge_signing_payload(
     include_client_ip: bool,
     signature_version: str | None,
     protocol: str,
+    include_usage_tag: bool = False,
 ) -> str:
     # Canonical structured encoding: object boundaries make field re-packing
     # impossible, the client-IP mode is itself authenticated, and ``protocol``
@@ -614,6 +629,7 @@ def _structured_bridge_signing_payload(
             ),
             "signature_version": signature_version,
             "target_instance": context.target_instance,
+            "usage_tag": context.usage_tag if include_usage_tag else None,
         },
         ensure_ascii=True,
         sort_keys=True,

@@ -308,6 +308,25 @@ async def test_daybreak_json_routes_reject_capability_before_body_validation(
 
 
 @pytest.mark.asyncio
+async def test_duplicate_capabilities_fail_before_file_body_validation(async_client: AsyncClient) -> None:
+    key = await _create_api_key("Duplicate capability file guard")
+
+    response = await async_client.post(
+        "/backend-api/codex/files",
+        headers=[
+            ("Authorization", f"Bearer {key}"),
+            ("X-Codex-LB-Required-Capability", "usage_tag_v1"),
+            ("X-Codex-LB-Required-Capability", "trusted_cyber"),
+            ("Content-Type", "application/json"),
+        ],
+        content=b"{",
+    )
+
+    assert response.status_code == 400
+    assert response.json() == _TRANSPORT_DENIAL
+
+
+@pytest.mark.asyncio
 async def test_daybreak_capability_does_not_bypass_api_firewall(async_client: AsyncClient) -> None:
     add_response = await async_client.post("/api/firewall/ips", json={"ipAddress": "10.20.30.40"})
     assert add_response.status_code == 200

@@ -399,6 +399,7 @@ class _HTTPBridgeOwnerForwardingMixin:
         proxy_api_authorization: str | None,
         file_owner_account_id: str | None = None,
         client_ip: str | None = None,
+        usage_tag: str | None = None,
     ) -> AsyncIterator[str]:
         current_instance, _ = _normalized_http_bridge_instance_ring(_service_get_settings())
         incoming_turn_state = _sticky_key_from_turn_state_header(headers)
@@ -432,6 +433,7 @@ class _HTTPBridgeOwnerForwardingMixin:
             original_affinity_key=owner_forward.key.affinity_key,
             file_owner_account_id=file_owner_account_id,
             client_ip=client_ip,
+            usage_tag=usage_tag,
         )
         forward_headers = _headers_with_authorization(headers, proxy_api_authorization)
         start = _service_time().monotonic()

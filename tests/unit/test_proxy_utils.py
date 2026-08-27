@@ -1777,6 +1777,58 @@ def test_filter_inbound_headers_strips_internal_capability_header():
     assert filtered["X-Custom"] == "preserved"
 
 
+def test_usage_tag_capability_is_not_treated_as_a_routing_capability() -> None:
+    headers = {"X-Codex-LB-Required-Capability": "usage_tag_v1"}
+
+    assert proxy_api._usage_tag_capability_required(headers) is True
+    assert proxy_api._required_capability_values(headers) == ()
+
+
+def test_usage_tag_capability_cannot_hide_an_additional_routing_capability() -> None:
+    headers = {
+        "X-Codex-LB-Required-Capability": "usage_tag_v1",
+        "x-codex-lb-required-capability": "trusted_cyber",
+    }
+
+    assert proxy_api._usage_tag_capability_required(headers) is False
+    assert proxy_api._required_capability_values(headers) == ("usage_tag_v1", "trusted_cyber")
+
+
+@pytest.mark.parametrize(
+    "header_name",
+    ["X-Codex-LB-Usage-Tag", "x-codex-lb-usage-tag", "X-CODEX-LB-USAGE-TAG"],
+)
+def test_filter_inbound_headers_strips_usage_tag(header_name: str) -> None:
+    filtered = filter_inbound_headers(
+        {
+            header_name: "guidance-v1/baseline--r02/attempt-1",
+            "X-Custom": "preserved",
+        }
+    )
+
+    assert "x-codex-lb-usage-tag" not in {key.lower() for key in filtered}
+    assert filtered["X-Custom"] == "preserved"
+
+
+def test_request_log_usage_tag_accepts_exact_valid_value_case_insensitively() -> None:
+    value = "guidance-v1/baseline--r02/attempt-1"
+
+    assert proxy_support._request_log_usage_tag({"X-CODEX-LB-USAGE-TAG": value}) == value
+    assert proxy_support._request_log_usage_tag({}) is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", " leading", "contains space", "é", "-leading", "a" * 129],
+)
+def test_request_log_usage_tag_rejects_malformed_values(value: str) -> None:
+    with pytest.raises(proxy_module.ProxyResponseError) as exc_info:
+        proxy_support._request_log_usage_tag({"X-Codex-LB-Usage-Tag": value})
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.payload["error"]["code"] == "invalid_usage_tag"
+
+
 def test_request_log_useragent_fields_extract_full_value_and_group() -> None:
     assert proxy_service._request_log_useragent_fields(
         {
@@ -40449,6 +40501,8 @@ async def test_transcribe_audio_strips_content_type_case_insensitively():
         headers={
             "content-type": "multipart/form-data; boundary=legacy",
             "X-Request-Id": "req_transcribe_1",
+            "X-CODEX-LB-USAGE-TAG": "guidance-v1/baseline--r02/attempt-1",
+            "X-CODEX-LB-REQUIRED-CAPABILITY": "usage_tag_v1",
         },
         access_token="token-1",
         account_id="acc_transcribe_1",
@@ -40462,6 +40516,8 @@ async def test_transcribe_audio_strips_content_type_case_insensitively():
     assert isinstance(raw_headers, dict)
     sent_headers = cast(dict[str, str], raw_headers)
     assert all(name.lower() != "content-type" for name in sent_headers)
+    assert "x-codex-lb-usage-tag" not in {name.lower() for name in sent_headers}
+    assert "x-codex-lb-required-capability" not in {name.lower() for name in sent_headers}
     assert sent_headers["Authorization"] == "Bearer token-1"
     assert sent_headers["chatgpt-account-id"] == "acc_transcribe_1"
 

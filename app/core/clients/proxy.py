@@ -93,6 +93,13 @@ from app.core.utils.sse import format_sse_event, parse_sse_data_json, sse_event_
 CODEX_INSTALLATION_ID_HEADER = "x-codex-installation-id"
 CODEX_TURN_METADATA_HEADER = "x-codex-turn-metadata"
 CODEX_LB_REQUIRED_CAPABILITY_HEADER = "x-codex-lb-required-capability"
+CODEX_LB_USAGE_TAG_CAPABILITY = "usage_tag_v1"
+CODEX_LB_USAGE_TAG_HEADER = "x-codex-lb-usage-tag"
+CODEX_LB_USAGE_TAG_ERROR_MESSAGE = (
+    "X-Codex-LB-Usage-Tag must be 1-128 characters, begin with an ASCII alphanumeric "
+    "character, and contain only ASCII alphanumerics or . _ : / @ + -"
+)
+_CODEX_LB_USAGE_TAG_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,127}\Z")
 CODEX_RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite"
 CODEX_RESPONSES_LITE_WEBSOCKET_METADATA_KEY = "ws_request_header_x_openai_internal_codex_responses_lite"
 
@@ -105,6 +112,7 @@ IGNORE_INBOUND_HEADERS = {
     "x-real-ip",
     CODEX_INSTALLATION_ID_HEADER,
     CODEX_LB_REQUIRED_CAPABILITY_HEADER,
+    CODEX_LB_USAGE_TAG_HEADER,
     "true-client-ip",
 }
 INTERNAL_OPENAI_UPSTREAM_HEADERS = frozenset(
@@ -112,6 +120,11 @@ INTERNAL_OPENAI_UPSTREAM_HEADERS = frozenset(
         CODEX_RESPONSES_LITE_HEADER,
     }
 )
+
+
+def is_valid_codex_lb_usage_tag(value: str) -> bool:
+    return _CODEX_LB_USAGE_TAG_PATTERN.fullmatch(value) is not None
+
 
 _ERROR_TYPE_CODE_MAP = {
     "rate_limit_exceeded": "rate_limit_exceeded",
@@ -811,6 +824,8 @@ def _build_upstream_transcribe_headers(
         headers["chatgpt-account-id"] = account_id
     for key, value in inbound.items():
         lower = key.lower()
+        if lower in {CODEX_LB_USAGE_TAG_HEADER, CODEX_LB_REQUIRED_CAPABILITY_HEADER}:
+            continue
         if lower == "user-agent":
             headers[key] = value
         elif lower.startswith(_TRANSCRIBE_FORWARD_HEADER_PREFIXES):

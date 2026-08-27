@@ -6087,6 +6087,7 @@ class _WebSocketMixin:
                     useragent_group=request_state.useragent_group,
                     conversation_id=request_state.conversation_id,
                     client_ip=request_state.client_ip,
+                    usage_tag=request_state.usage_tag,
                     request_kind=request_state.request_kind,
                     connection_request_kind=request_state.connection_request_kind,
                 )
@@ -6226,6 +6227,7 @@ class _WebSocketMixin:
             useragent_group=request_state.useragent_group,
             conversation_id=request_state.conversation_id,
             client_ip=request_state.client_ip,
+            usage_tag=request_state.usage_tag,
             request_kind=request_state.request_kind,
             connection_request_kind=request_state.connection_request_kind,
         )
@@ -6582,6 +6584,7 @@ class _WebSocketMixin:
                     useragent_group=request_state.useragent_group,
                     conversation_id=request_state.conversation_id,
                     client_ip=request_state.client_ip,
+                    usage_tag=request_state.usage_tag,
                     request_kind=request_state.request_kind,
                     connection_request_kind=request_state.connection_request_kind,
                 )

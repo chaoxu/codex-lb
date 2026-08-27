@@ -458,6 +458,7 @@ class RequestLog(Base):
     )
     model_source_kind: Mapped[str | None] = mapped_column(String, nullable=True)
     api_key_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    usage_tag: Mapped[str | None] = mapped_column(String(128), nullable=True)
     session_id: Mapped[str | None] = mapped_column(String, nullable=True)
     request_id: Mapped[str] = mapped_column(String, nullable=False)
     archive_request_id: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -2164,6 +2165,7 @@ Index("idx_api_keys_name", ApiKey.name)
 Index("idx_logs_account_time", RequestLog.account_id, RequestLog.requested_at)
 Index("idx_logs_model_source_time", RequestLog.model_source_id, RequestLog.requested_at)
 Index("idx_logs_api_key_time", RequestLog.api_key_id, RequestLog.requested_at.desc(), RequestLog.id.desc())
+Index("idx_logs_usage_tag", RequestLog.usage_tag)
 Index("idx_logs_request_kind_time", RequestLog.request_kind, RequestLog.requested_at.desc(), RequestLog.id.desc())
 Index(
     "idx_logs_account_kind_deleted_latest",

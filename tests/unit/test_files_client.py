@@ -93,7 +93,13 @@ async def test_create_file_returns_upstream_json_on_success() -> None:
 
     result = await create_file(
         payload={"file_name": "page.pdf", "file_size": 1024, "use_case": OPENAI_FILE_USE_CASE},
-        headers={"User-Agent": "codex-cli/1.0", "x-codex-version": "1.2.3", "Authorization": "Bearer not-forwarded"},
+        headers={
+            "User-Agent": "codex-cli/1.0",
+            "x-codex-version": "1.2.3",
+            "X-CODEX-LB-USAGE-TAG": "guidance-v1/baseline--r02/attempt-1",
+            "X-CODEX-LB-REQUIRED-CAPABILITY": "usage_tag_v1",
+            "Authorization": "Bearer not-forwarded",
+        },
         access_token="upstream-token",
         account_id="acc_1",
         session=_client_session(session),
@@ -110,6 +116,8 @@ async def test_create_file_returns_upstream_json_on_success() -> None:
     # Forward UA + x-codex-* but NOT bulk inbound auth.
     assert sent_headers["User-Agent"] == "codex-cli/1.0"
     assert sent_headers["x-codex-version"] == "1.2.3"
+    assert "x-codex-lb-usage-tag" not in {name.lower() for name in sent_headers}
+    assert "x-codex-lb-required-capability" not in {name.lower() for name in sent_headers}
     body = json.loads(call["data"])
     assert body == {"file_name": "page.pdf", "file_size": 1024, "use_case": "codex"}
 

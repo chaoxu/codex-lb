@@ -9,7 +9,13 @@ from starlette._utils import get_route_path
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.core.auth.dependencies import validate_required_proxy_api_key_authorization
-from app.core.clients.proxy import CODEX_LB_REQUIRED_CAPABILITY_HEADER
+from app.core.clients.proxy import (
+    CODEX_LB_REQUIRED_CAPABILITY_HEADER,
+    CODEX_LB_USAGE_TAG_CAPABILITY,
+    CODEX_LB_USAGE_TAG_ERROR_MESSAGE,
+    CODEX_LB_USAGE_TAG_HEADER,
+    is_valid_codex_lb_usage_tag,
+)
 from app.core.errors import openai_error
 from app.core.exceptions import ProxyAuthError, ProxyRequiredCapabilityTransportError
 from app.core.runtime_logging import log_error_response
@@ -21,6 +27,7 @@ from app.modules.proxy.images_observability import (
 logger = logging.getLogger(__name__)
 
 _REQUIRED_CAPABILITY_HEADER_BYTES = CODEX_LB_REQUIRED_CAPABILITY_HEADER.lower().encode("latin-1")
+_USAGE_TAG_HEADER_BYTES = CODEX_LB_USAGE_TAG_HEADER.lower().encode("latin-1")
 
 _JSON_BODY_DENY_PATHS = frozenset(
     {
@@ -44,15 +51,22 @@ def _is_pre_body_deny_path(path: str) -> bool:
     return normalized in _JSON_BODY_DENY_PATHS or normalized.startswith("/v1/warmup/")
 
 
-def _has_required_capability_header(scope: Scope) -> bool:
-    for name, _value in scope.get("headers", []):
-        if name.lower() == _REQUIRED_CAPABILITY_HEADER_BYTES:
-            return True
-    return False
+def _required_capability_values(scope: Scope) -> tuple[str, ...]:
+    return tuple(
+        value.decode("latin-1")
+        for name, value in scope.get("headers", [])
+        if name.lower() == _REQUIRED_CAPABILITY_HEADER_BYTES
+    )
+
+
+def _usage_tag_values(scope: Scope) -> tuple[str, ...]:
+    return tuple(
+        value.decode("latin-1") for name, value in scope.get("headers", []) if name.lower() == _USAGE_TAG_HEADER_BYTES
+    )
 
 
 class RequiredCapabilityHttpMiddleware:
-    """Deny capability-marked POSTs on JSON-body proxy paths before the body is read.
+    """Negotiate every capability-marked HTTP request before routing or body reads.
 
     Pure ASGI with cheap synchronous guards first; the ``Request`` object is
     only constructed on the cold deny path.
@@ -63,10 +77,21 @@ class RequiredCapabilityHttpMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if (
+            scope["type"] == "http"
+            and (usage_tag_values := _usage_tag_values(scope))
+            and (len(usage_tag_values) != 1 or not is_valid_codex_lb_usage_tag(usage_tag_values[0]))
+        ):
+            request = Request(scope)
+            response = _invalid_usage_tag_response(request)
+            await response(scope, receive, send)
+            return
+        if (
             scope["type"] != "http"
-            or scope["method"] != "POST"
-            or not _has_required_capability_header(scope)
-            or not _is_pre_body_deny_path(get_route_path(scope))
+            or not (capability_values := _required_capability_values(scope))
+            or (
+                CODEX_LB_USAGE_TAG_CAPABILITY not in capability_values
+                and not (scope["method"] == "POST" and _is_pre_body_deny_path(get_route_path(scope)))
+            )
         ):
             await self.app(scope, receive, send)
             return
@@ -77,6 +102,9 @@ class RequiredCapabilityHttpMiddleware:
         except ProxyAuthError as exc:
             response = _capability_error_response(request, exc)
         else:
+            if capability_values == (CODEX_LB_USAGE_TAG_CAPABILITY,):
+                await self.app(scope, receive, send)
+                return
             response = _capability_error_response(request, ProxyRequiredCapabilityTransportError())
         await response(scope, receive, send)
 
@@ -113,4 +141,23 @@ def _capability_error_response(
     return JSONResponse(
         status_code=exc.status_code,
         content=openai_error(exc.code, exc.message, error_type=exc.error_type),
+    )
+
+
+def _invalid_usage_tag_response(request: Request) -> JSONResponse:
+    log_error_response(
+        logger,
+        request,
+        400,
+        "invalid_usage_tag",
+        CODEX_LB_USAGE_TAG_ERROR_MESSAGE,
+        category="openai_error_response",
+    )
+    return JSONResponse(
+        status_code=400,
+        content=openai_error(
+            "invalid_usage_tag",
+            CODEX_LB_USAGE_TAG_ERROR_MESSAGE,
+            error_type="invalid_request_error",
+        ),
     )

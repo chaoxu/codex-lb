@@ -38,6 +38,27 @@ def _make_auth_json(account_id: str, email: str) -> dict:
 
 
 @pytest.mark.asyncio
+async def test_v1_chat_completions_rejects_invalid_usage_tag_before_source_routing(async_client, monkeypatch):
+    source_routing_calls = 0
+
+    async def fail_if_source_routed(*_args, **_kwargs):
+        nonlocal source_routing_calls
+        source_routing_calls += 1
+        raise AssertionError("invalid usage tag reached source routing")
+
+    monkeypatch.setattr(proxy_api, "_select_chat_model_source", fail_if_source_routed)
+    response = await async_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-5.2", "messages": [{"role": "user", "content": "hi"}]},
+        headers={"X-Codex-LB-Usage-Tag": "invalid tag with spaces"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_usage_tag"
+    assert source_routing_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_v1_chat_completions_stream(async_client, monkeypatch):
     email = "chatstream@example.com"
     raw_account_id = "acc_chatstream"

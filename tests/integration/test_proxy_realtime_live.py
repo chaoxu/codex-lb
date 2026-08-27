@@ -9,6 +9,7 @@ from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Headers
 from sqlalchemy import select
 from starlette.testclient import WebSocketDenialResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -220,6 +221,55 @@ def test_realtime_sideband_websocket_aliases_route_to_shared_service(
     assert f'"WebSocket {logged_path}" [accepted]' in access_messages[0]
     assert expected_call_id not in access_messages[0]
     assert "quicksilver" not in access_messages[0]
+
+
+def test_realtime_sideband_accepts_authenticated_usage_tag_capability(app_instance, monkeypatch) -> None:
+    async def fake_proxy_live(self, websocket, call_id, headers, *_args, api_key, **_kwargs):
+        del self
+        assert call_id == "rtc_usage_tag"
+        assert api_key.id == "live-api-key"
+        assert headers["x-codex-lb-usage-tag"] == "guidance-v1/baseline--r02/attempt-1"
+        await websocket.accept()
+        await websocket.send_text("ready")
+        await websocket.close(code=1000)
+
+    monkeypatch.setattr(proxy_module.ProxyService, "proxy_realtime_live_websocket", fake_proxy_live)
+
+    with TestClient(app_instance) as client:
+        with client.websocket_connect(
+            "/v1/realtime?call_id=rtc_usage_tag",
+            headers={
+                "Authorization": "Bearer live-key",
+                "X-Codex-LB-Required-Capability": "usage_tag_v1",
+                "X-Codex-LB-Usage-Tag": "guidance-v1/baseline--r02/attempt-1",
+            },
+        ) as websocket:
+            assert websocket.receive_text() == "ready"
+
+
+def test_realtime_sideband_rejects_duplicate_usage_tags_before_service(app_instance, monkeypatch) -> None:
+    async def reject_if_called(*_args, **_kwargs):
+        pytest.fail("duplicate usage tags must fail before the Live service")
+
+    monkeypatch.setattr(proxy_module.ProxyService, "proxy_realtime_live_websocket", reject_if_called)
+
+    with TestClient(app_instance) as client:
+        with pytest.raises(WebSocketDenialResponse) as denial:
+            with client.websocket_connect(
+                "/v1/realtime?call_id=rtc_duplicate_usage_tag",
+                headers=Headers(
+                    [
+                        ("Authorization", "Bearer live-key"),
+                        ("X-Codex-LB-Required-Capability", "usage_tag_v1"),
+                        ("X-Codex-LB-Usage-Tag", "guidance-v1/baseline--r02/attempt-1"),
+                        ("X-Codex-LB-Usage-Tag", "guidance-v1/baseline--r02/attempt-2"),
+                    ]
+                ),
+            ):
+                pytest.fail("duplicate usage tags must not connect")
+
+    assert denial.value.status_code == 400
+    assert denial.value.json()["error"]["code"] == "invalid_usage_tag"
 
 
 @pytest.mark.parametrize(

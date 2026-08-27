@@ -48,6 +48,8 @@ from app.core.cache.invalidation import NAMESPACE_RESET_CREDITS, bump_cache_inva
 from app.core.clients.files import FileProxyError
 from app.core.clients.proxy import (
     CODEX_LB_REQUIRED_CAPABILITY_HEADER,
+    CODEX_LB_USAGE_TAG_CAPABILITY,
+    CODEX_LB_USAGE_TAG_HEADER,
     CodexControlRequestPrivacyPolicy,
     CodexControlResponse,
     ProxyResponseError,
@@ -225,6 +227,7 @@ from app.modules.proxy._service.support import (
     _is_reasoning_summary_interleavable_event,
     _reasoning_summary_delta_key,
     _request_log_client_fields,
+    _request_log_usage_tag,
     _reset_propagated_capacity_startup_ready,
     _reset_propagated_capacity_startup_wait,
     _reset_propagated_responses_owner_forward_dispatched,
@@ -1086,6 +1089,10 @@ async def responses(
     capability_transport_denial = await _required_capability_http_transport_denial(request, api_key)
     if capability_transport_denial is not None:
         return capability_transport_denial
+    try:
+        _request_log_usage_tag(request.headers)
+    except ProxyResponseError as exc:
+        return _logged_error_json_response(request, exc.status_code, exc.payload)
     explicit_openai_sdk_marker = _has_explicit_openai_sdk_marker(request)
     openai_sdk_request = _is_openai_sdk_request(request, payload)
     native_codex_heartbeat = _is_native_codex_request(request.headers) and not explicit_openai_sdk_marker
@@ -1201,6 +1208,11 @@ async def responses_websocket(
     if denial is not None:
         await websocket.send_denial_response(denial)
         return
+    try:
+        _request_log_usage_tag(websocket.headers)
+    except ProxyResponseError as exc:
+        await websocket.send_denial_response(JSONResponse(status_code=exc.status_code, content=exc.payload))
+        return
     client_turn_state = proxy_affinity_module._sticky_key_from_turn_state_header(websocket.headers)
     turn_state = proxy_affinity_module.ensure_downstream_turn_state(websocket.headers)
     await websocket.accept(headers=proxy_affinity_module.build_downstream_turn_state_accept_headers(turn_state))
@@ -1250,6 +1262,10 @@ async def v1_responses(
     raw_trigger_error = _raw_compaction_trigger_error(request)
     if raw_trigger_error is not None:
         return _logged_error_json_response(request, 400, openai_client_payload_error(raw_trigger_error))
+    try:
+        _request_log_usage_tag(request.headers)
+    except ProxyResponseError as exc:
+        return _logged_error_json_response(request, exc.status_code, exc.payload)
     try:
         responses_payload = payload.to_responses_request()
         enforce_strict_text_format(responses_payload)
@@ -1374,6 +1390,8 @@ async def internal_bridge_responses(
             return _logged_error_json_response(request, exc.status_code, exc.payload)
     skip_limit_enforcement = api_key is None or forwarded_request_context.context.reservation is not None
     forwarded_headers = _strip_internal_bridge_headers(request.headers)
+    if forwarded_request_context.context.usage_tag is not None:
+        forwarded_headers[CODEX_LB_USAGE_TAG_HEADER] = forwarded_request_context.context.usage_tag
     if forwarded_request_context.context.original_request_unanchored:
         forwarded_headers = {
             key: value for key, value in forwarded_headers.items() if key.lower() != "x-codex-turn-state"
@@ -1424,11 +1442,20 @@ async def _proxy_realtime_live_websocket_route(
     redacted_path: str,
 ) -> None:
     _redact_realtime_live_websocket_scope(websocket, path=redacted_path)
-    api_key, denial = await _validate_proxy_websocket_request(websocket, require_api_key=True)
+    api_key, denial = await _validate_proxy_websocket_request(
+        websocket,
+        allow_usage_tag_capability=True,
+        require_api_key=True,
+    )
     if denial is not None:
         await websocket.send_denial_response(denial)
         return
     assert api_key is not None
+    try:
+        _request_log_usage_tag(websocket.headers)
+    except ProxyResponseError as exc:
+        await websocket.send_denial_response(JSONResponse(status_code=exc.status_code, content=exc.payload))
+        return
     try:
         if protocol is RealtimeWebSocketProtocol.LIVE_V3 and any(key == "call_id" for key, _value in query_params):
             raise ProxyResponseError(
@@ -1532,6 +1559,11 @@ async def v1_responses_websocket(
     )
     if denial is not None:
         await websocket.send_denial_response(denial)
+        return
+    try:
+        _request_log_usage_tag(websocket.headers)
+    except ProxyResponseError as exc:
+        await websocket.send_denial_response(JSONResponse(status_code=exc.status_code, content=exc.payload))
         return
     client_turn_state = proxy_affinity_module._sticky_key_from_turn_state_header(websocket.headers)
     turn_state = proxy_affinity_module.ensure_downstream_turn_state(websocket.headers)
@@ -1908,6 +1940,10 @@ async def _run_v1_warmup(
     capability_transport_denial = await _required_capability_http_transport_denial(request, api_key)
     if capability_transport_denial is not None:
         return capability_transport_denial
+    try:
+        _request_log_usage_tag(request.headers)
+    except ProxyResponseError as exc:
+        return _logged_error_json_response(request, exc.status_code, exc.payload)
     if mode not in _WARMUP_MODES:
         return _logged_error_json_response(
             request,
@@ -2484,6 +2520,10 @@ async def v1_audio_transcriptions(
     capability_transport_denial = await _required_capability_http_transport_denial(request, api_key)
     if capability_transport_denial is not None:
         return capability_transport_denial
+    try:
+        _request_log_usage_tag(request.headers)
+    except ProxyResponseError as exc:
+        return _logged_error_json_response(request, exc.status_code, exc.payload)
     multipart = await _parse_transcription_multipart(request, require_model=True)
     assert multipart.model is not None
     model = multipart.model
@@ -4174,6 +4214,10 @@ async def v1_chat_completions(
     capability_transport_denial = await _required_capability_http_transport_denial(request, api_key)
     if capability_transport_denial is not None:
         return capability_transport_denial
+    try:
+        _request_log_usage_tag(request.headers)
+    except ProxyResponseError as exc:
+        return _logged_error_json_response(request, exc.status_code, exc.payload)
     cursor_compat_client = _is_cursor_compat_client(request, api_key)
     effective_model = _effective_model_for_api_key(api_key, payload.model)
 
@@ -5542,6 +5586,10 @@ async def _stream_responses(
     api_key_policy_already_applied: bool = False,
     prohibit_fast_mode: bool = False,
 ) -> Response:
+    try:
+        _request_log_usage_tag(forwarded_headers or request.headers)
+    except ProxyResponseError as exc:
+        return _logged_error_json_response(request, exc.status_code, exc.payload)
     # Owner-forwarded payloads have already passed API-key enforcement,
     # account-catalog fallback, reservation, and signing on the origin
     # instance. Re-validate the key's other policy here, but retain the
@@ -6010,6 +6058,10 @@ async def _collect_responses(
     api_key_policy_already_applied: bool = False,
     prohibit_fast_mode: bool = False,
 ) -> Response:
+    try:
+        _request_log_usage_tag(request.headers)
+    except ProxyResponseError as exc:
+        return _logged_error_json_response(request, exc.status_code, exc.payload)
     service_tier_was_enforced = False
     if not api_key_policy_already_applied:
         service_tier_was_enforced = apply_api_key_enforcement(
@@ -7625,25 +7677,37 @@ def _is_legacy_proxy_auth_override_type_error(exc: TypeError) -> bool:
     return "unexpected keyword argument 'request'" in message
 
 
-def _required_capability_values(headers: Mapping[str, str]) -> tuple[str, ...]:
+def _all_required_capability_values(headers: Mapping[str, str]) -> tuple[str, ...]:
     if isinstance(headers, Headers):
         return tuple(headers.getlist(CODEX_LB_REQUIRED_CAPABILITY_HEADER))
     normalized_name = CODEX_LB_REQUIRED_CAPABILITY_HEADER.lower()
     return tuple(value for name, value in headers.items() if name.lower() == normalized_name)
 
 
+def _required_capability_values(headers: Mapping[str, str]) -> tuple[str, ...]:
+    values = _all_required_capability_values(headers)
+    return () if values == (CODEX_LB_USAGE_TAG_CAPABILITY,) else values
+
+
+def _usage_tag_capability_required(headers: Mapping[str, str]) -> bool:
+    return _all_required_capability_values(headers) == (CODEX_LB_USAGE_TAG_CAPABILITY,)
+
+
 async def _validate_proxy_websocket_request(
     websocket: WebSocket,
     *,
     allow_required_capability: bool = False,
+    allow_usage_tag_capability: bool = False,
     require_api_key: bool = False,
 ) -> tuple[ApiKeyData | None, JSONResponse | None]:
     denial = await _websocket_firewall_denial_response(websocket)
     if denial is not None:
         return None, denial
+    all_capability_header_values = _all_required_capability_values(websocket.headers)
     capability_header_values = _required_capability_values(websocket.headers)
+    usage_tag_capability_required = _usage_tag_capability_required(websocket.headers)
     try:
-        if require_api_key or capability_header_values:
+        if require_api_key or capability_header_values or usage_tag_capability_required:
             api_key = await validate_required_proxy_api_key_authorization(websocket.headers.get("authorization"))
         else:
             api_key = await _validate_proxy_api_key_authorization_for_connection(
@@ -7655,7 +7719,11 @@ async def _validate_proxy_websocket_request(
             status_code=exc.status_code,
             content=openai_error(exc.code, exc.message, error_type=exc.error_type),
         )
-    if capability_header_values and not allow_required_capability:
+    if (
+        all_capability_header_values
+        and not allow_required_capability
+        and not (allow_usage_tag_capability and usage_tag_capability_required)
+    ):
         return api_key, JSONResponse(
             status_code=400,
             content=openai_error(
@@ -7673,10 +7741,13 @@ async def _required_capability_http_transport_denial(
 ) -> JSONResponse | None:
     """Authenticate capability intent and reject unsupported HTTP routing."""
 
-    if not _required_capability_values(request.headers):
+    capability_header_values = _all_required_capability_values(request.headers)
+    if not capability_header_values:
         return None
     if api_key is None:
         await validate_required_proxy_api_key_authorization(request.headers.get("authorization"))
+    if capability_header_values == (CODEX_LB_USAGE_TAG_CAPABILITY,):
+        return None
     return _logged_error_json_response(
         request,
         400,
@@ -7927,6 +7998,7 @@ async def _log_source_chat_completion(
     upstream_status_code: int | None = None,
 ) -> None:
     conversation_id = _request_log_client_fields(request.headers)[2]
+    usage_tag = _request_log_usage_tag(request.headers)
     try:
         async with get_background_session() as session:
             await RequestLogsRepository(session).add_log(
@@ -7934,6 +8006,7 @@ async def _log_source_chat_completion(
                 model_source_id=source.id,
                 model_source_kind=source.kind,
                 api_key_id=api_key.id if api_key is not None else None,
+                usage_tag=usage_tag,
                 request_id=ensure_request_id(),
                 model=model,
                 input_tokens=usage.input_tokens if usage is not None else None,

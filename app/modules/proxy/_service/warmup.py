@@ -27,7 +27,11 @@ from app.core.openai.requests import ResponsesCompactRequest
 from app.core.upstream_proxy import UpstreamProxyRouteError
 from app.db.models import Account, AccountStatus
 from app.modules.api_keys.service import ApiKeyData, ApiKeyUsageReservationData
-from app.modules.proxy._service.support import _call_with_supported_optional_kwargs, _request_log_client_fields
+from app.modules.proxy._service.support import (
+    _call_with_supported_optional_kwargs,
+    _request_log_client_fields,
+    _request_log_usage_tag,
+)
 from app.modules.proxy.helpers import _header_account_id, _normalize_error_code, _parse_openai_error
 from app.modules.proxy.request_policy import normalize_upstream_model_alias, validate_model_access
 
@@ -178,6 +182,7 @@ class _WarmupMixin:
         normalized_mode = mode.strip().lower()
         if normalized_mode not in _WARMUP_MODES:
             raise ValueError(f"Unsupported warmup mode: {mode}")
+        usage_tag = _request_log_usage_tag(headers)
 
         proxy = cast(_WarmupServiceProtocol, self)
         async with proxy._repo_factory() as repos:
@@ -246,6 +251,7 @@ class _WarmupMixin:
                     account=account,
                     api_key=api_key,
                     headers=filtered_headers,
+                    usage_tag=usage_tag,
                     warmup_model=effective_model,
                     prohibit_fast_mode=prohibit_fast_mode,
                 )
@@ -299,6 +305,7 @@ class _WarmupMixin:
         headers: Mapping[str, str],
         warmup_model: str,
         prohibit_fast_mode: bool,
+        usage_tag: str | None = None,
     ) -> _WarmupSubmitResult:
         started_at = time.monotonic()
         useragent, useragent_group, conversation_id = _request_log_client_fields(headers)
@@ -452,6 +459,7 @@ class _WarmupMixin:
                     useragent=useragent,
                     useragent_group=useragent_group,
                     conversation_id=conversation_id,
+                    usage_tag=usage_tag,
                 )
             finally:
                 await proxy._release_websocket_reservation(reservation)

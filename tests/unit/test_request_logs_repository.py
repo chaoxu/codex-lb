@@ -82,6 +82,45 @@ async def test_add_log_persists_request_and_connection_kinds(db_setup) -> None:
 
 
 @pytest.mark.asyncio
+async def test_add_log_persists_usage_tag_and_leaves_untagged_rows_null(db_setup) -> None:
+    del db_setup
+    async with SessionLocal() as session:
+        repo = RequestLogsRepository(session)
+
+        tagged = await repo.add_log(
+            account_id=None,
+            request_id="req_tagged",
+            model="gpt-5.2",
+            input_tokens=10,
+            output_tokens=5,
+            latency_ms=1,
+            status="success",
+            error_code=None,
+            usage_tag="guidance-v1/baseline--r02/attempt-1",
+        )
+        untagged = await repo.add_log(
+            account_id=None,
+            request_id="req_untagged",
+            model="gpt-5.2",
+            input_tokens=None,
+            output_tokens=None,
+            latency_ms=1,
+            status="error",
+            error_code="stream_incomplete",
+        )
+
+        tagged_persisted = await session.scalar(select(RequestLog).where(RequestLog.id == tagged.id))
+        untagged_persisted = await session.scalar(select(RequestLog).where(RequestLog.id == untagged.id))
+
+    assert tagged_persisted is not None
+    assert tagged_persisted.usage_tag == "guidance-v1/baseline--r02/attempt-1"
+    assert untagged_persisted is not None
+    assert untagged_persisted.usage_tag is None
+    assert untagged_persisted.input_tokens is None
+    assert untagged_persisted.output_tokens is None
+
+
+@pytest.mark.asyncio
 async def test_add_log_persists_normalized_conversation_id(db_setup) -> None:
     del db_setup
     async with SessionLocal() as session:

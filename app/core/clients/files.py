@@ -62,6 +62,8 @@ _FILE_FINALIZE_POLL_DELAY_SECONDS: float = 0.25
 # client fingerprint as a direct Codex request. Matches the
 # ``_TRANSCRIBE_FORWARD_HEADER_PREFIXES`` policy in proxy.py.
 _FILES_FORWARD_HEADER_PREFIXES: tuple[str, ...] = ("x-openai-", "x-codex-")
+_CODEX_LB_USAGE_TAG_HEADER = "x-codex-lb-usage-tag"
+_CODEX_LB_REQUIRED_CAPABILITY_HEADER = "x-codex-lb-required-capability"
 
 # Per-call timeout overrides set by the proxy service so that file
 # create / finalize calls inherit the per-request budget the same way
@@ -149,6 +151,8 @@ def _build_files_headers(
         headers["chatgpt-account-id"] = account_id
     for key, value in inbound.items():
         lower = key.lower()
+        if lower in {_CODEX_LB_USAGE_TAG_HEADER, _CODEX_LB_REQUIRED_CAPABILITY_HEADER}:
+            continue
         if lower == "user-agent":
             headers.setdefault(key, value)
         elif lower.startswith(_FILES_FORWARD_HEADER_PREFIXES):

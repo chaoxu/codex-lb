@@ -178,6 +178,175 @@ async def test_proxy_responses_no_accounts(async_client):
 
 
 @pytest.mark.asyncio
+async def test_proxy_responses_usage_tag_is_stripped_upstream_and_persisted_with_usage(
+    async_client,
+    monkeypatch,
+):
+    raw_account_id = "acc_usage_tag_success"
+    auth_json = _make_auth_json(raw_account_id, "usage-tag-success@example.com")
+    response = await async_client.post(
+        "/api/accounts/import",
+        files={"auth_json": ("auth.json", json.dumps(auth_json), "application/json")},
+    )
+    assert response.status_code == 200
+    response = await async_client.put("/api/settings", json={"apiKeyAuthEnabled": True})
+    assert response.status_code == 200
+    response = await async_client.post("/api/api-keys/", json={"name": "usage-tag-success"})
+    assert response.status_code == 200
+    api_key = response.json()["key"]
+
+    captured_headers: list[Mapping[str, str]] = []
+
+    async def fake_stream(payload, headers, access_token, account_id, **kwargs):
+        del payload, access_token, account_id, kwargs
+        captured_headers.append(headers)
+        yield (
+            'data: {"type":"response.completed","response":{"id":"resp_usage_tag_success",'
+            '"object":"response","status":"completed","output":[],"usage":{"input_tokens":12,'
+            '"output_tokens":3,"input_tokens_details":{"cached_tokens":4},'
+            '"output_tokens_details":{"reasoning_tokens":2},"total_tokens":15}}}\n\n'
+        )
+
+    monkeypatch.setattr(proxy_module, "core_stream_responses", fake_stream)
+    usage_tag = "guidance-v1/baseline--r02/attempt-1"
+    async with async_client.stream(
+        "POST",
+        "/backend-api/codex/responses",
+        json={"model": "gpt-5.1", "instructions": "Return OK.", "input": [], "stream": True},
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "X-Codex-LB-Usage-Tag": usage_tag,
+            "X-Codex-LB-Required-Capability": "usage_tag_v1",
+        },
+    ) as resp:
+        assert resp.status_code == 200
+        lines = [line async for line in resp.aiter_lines() if line]
+
+    assert _extract_first_event(lines)["type"] == "response.completed"
+    assert len(captured_headers) == 1
+    assert "x-codex-lb-usage-tag" not in {key.lower() for key in captured_headers[0]}
+    assert "x-codex-lb-required-capability" not in {key.lower() for key in captured_headers[0]}
+
+    async with SessionLocal() as session:
+        log = await session.scalar(select(RequestLog).where(RequestLog.request_id == "resp_usage_tag_success"))
+    assert log is not None
+    assert log.usage_tag == usage_tag
+    assert log.input_tokens == 12
+    assert log.cached_input_tokens == 4
+    assert log.output_tokens == 3
+    assert log.reasoning_tokens == 2
+    assert log.status == "success"
+
+
+@pytest.mark.asyncio
+async def test_proxy_responses_usage_tag_survives_incomplete_stream_with_unknown_usage(
+    async_client,
+    monkeypatch,
+):
+    raw_account_id = "acc_usage_tag_incomplete"
+    auth_json = _make_auth_json(raw_account_id, "usage-tag-incomplete@example.com")
+    response = await async_client.post(
+        "/api/accounts/import",
+        files={"auth_json": ("auth.json", json.dumps(auth_json), "application/json")},
+    )
+    assert response.status_code == 200
+
+    captured_headers: list[Mapping[str, str]] = []
+
+    async def fake_stream(payload, headers, access_token, account_id, **kwargs):
+        del payload, access_token, account_id, kwargs
+        captured_headers.append(headers)
+        if False:
+            yield ""
+
+    monkeypatch.setattr(proxy_module, "core_stream_responses", fake_stream)
+    usage_tag = "guidance-v1/failure--r02/attempt-2"
+    async with async_client.stream(
+        "POST",
+        "/backend-api/codex/responses",
+        json={"model": "gpt-5.1", "instructions": "Return OK.", "input": [], "stream": True},
+        headers={"X-Codex-LB-Usage-Tag": usage_tag, "X-Request-Id": "req_usage_tag_incomplete"},
+    ) as resp:
+        assert resp.status_code == 200
+        lines = [line async for line in resp.aiter_lines() if line]
+
+    event = _extract_first_event(lines)
+    assert event["type"] == "response.failed"
+    assert event["response"]["error"]["code"] == "stream_incomplete"
+    assert len(captured_headers) == 1
+    assert "x-codex-lb-usage-tag" not in {key.lower() for key in captured_headers[0]}
+
+    async with SessionLocal() as session:
+        log = await session.scalar(select(RequestLog).where(RequestLog.usage_tag == usage_tag))
+    assert log is not None
+    assert log.status == "error"
+    assert log.error_code == "stream_incomplete"
+    assert log.input_tokens is None
+    assert log.cached_input_tokens is None
+    assert log.output_tokens is None
+    assert log.reasoning_tokens is None
+
+
+@pytest.mark.asyncio
+async def test_proxy_responses_rejects_invalid_usage_tag_before_upstream(async_client, monkeypatch):
+    raw_account_id = "acc_usage_tag_invalid"
+    auth_json = _make_auth_json(raw_account_id, "usage-tag-invalid@example.com")
+    response = await async_client.post(
+        "/api/accounts/import",
+        files={"auth_json": ("auth.json", json.dumps(auth_json), "application/json")},
+    )
+    assert response.status_code == 200
+
+    upstream_calls = 0
+
+    async def fake_stream(*args, **kwargs):
+        del args, kwargs
+        nonlocal upstream_calls
+        upstream_calls += 1
+        if False:
+            yield ""
+
+    monkeypatch.setattr(proxy_module, "core_stream_responses", fake_stream)
+    response = await async_client.post(
+        "/backend-api/codex/responses",
+        json={"model": "gpt-5.1", "instructions": "Return OK.", "input": [], "stream": True},
+        headers={"X-Codex-LB-Usage-Tag": "invalid tag"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_usage_tag"
+    assert upstream_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("POST", "/backend-api/codex/files"),
+        ("POST", "/v1/responses/compact"),
+        ("POST", "/v1/audio/transcriptions"),
+        ("POST", "/v1/images/generations"),
+        ("GET", "/backend-api/codex/models"),
+        ("GET", "/v1/models"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_invalid_usage_tag_is_rejected_by_middleware_before_route_work(async_client, monkeypatch, method, path):
+    async def fail_if_reserved(*_args, **_kwargs):
+        raise AssertionError("invalid usage tag reached API-key reservation")
+
+    monkeypatch.setattr(proxy_api_module, "_enforce_request_limits", fail_if_reserved)
+    response = await async_client.request(
+        method,
+        path,
+        headers={"X-Codex-LB-Usage-Tag": "invalid tag with spaces"},
+        content=b"",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_usage_tag"
+
+
+@pytest.mark.asyncio
 async def test_backend_responses_prohibits_fast_model_alias_priority_tier(async_client, monkeypatch):
     raw_account_id = "acc_prohibit_fast_mode"
     auth_json = _make_auth_json(raw_account_id, "prohibit-fast-mode@example.com")

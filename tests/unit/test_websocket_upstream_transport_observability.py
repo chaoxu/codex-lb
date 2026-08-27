@@ -240,6 +240,7 @@ async def test_websocket_finalizer_records_bridge_upstream_transport_and_metric(
             "useragent_group": None,
             "conversation_id": None,
             "client_ip": None,
+            "usage_tag": None,
             "request_kind": "normal",
             "connection_request_kind": None,
         }
@@ -323,6 +324,7 @@ async def test_websocket_connect_failure_records_bridge_upstream_transport_and_m
             "useragent_group": None,
             "conversation_id": None,
             "client_ip": None,
+            "usage_tag": None,
             "request_kind": "normal",
             "connection_request_kind": None,
         }
@@ -393,6 +395,7 @@ async def test_fail_pending_websocket_requests_records_bridge_upstream_transport
             "useragent_group": None,
             "conversation_id": None,
             "client_ip": None,
+            "usage_tag": None,
             "request_kind": "normal",
             "connection_request_kind": None,
         }

@@ -279,6 +279,7 @@ class _StreamingRetryMixin:
         upstream_stream_transport_override: str | None = None,
         client_ip: str | None = None,
         enforce_openai_sdk_contract: bool = True,
+        usage_tag: str | None = None,
     ) -> AsyncIterator[str]:
         proxy = cast(_StreamingServiceProtocol, self)
         useragent, useragent_group, conversation_id = _request_log_client_fields(headers)
@@ -580,6 +581,7 @@ class _StreamingRetryMixin:
                 useragent_group=useragent_group,
                 conversation_id=conversation_id,
                 client_ip=client_ip,
+                usage_tag=usage_tag,
             )
             settled = await _settle_stream_usage_before_pending_penalty(settlement)
 
@@ -659,6 +661,7 @@ class _StreamingRetryMixin:
                     useragent_group=useragent_group,
                     conversation_id=conversation_id,
                     client_ip=client_ip,
+                    usage_tag=usage_tag,
                     tool_call_dedupe=tool_call_dedupe,
                     enforce_openai_sdk_contract=enforce_openai_sdk_contract,
                 )
@@ -906,6 +909,7 @@ class _StreamingRetryMixin:
                     useragent_group=useragent_group,
                     conversation_id=conversation_id,
                     client_ip=client_ip,
+                    usage_tag=usage_tag,
                 )
             return format_sse_event(event)
 
@@ -1022,6 +1026,7 @@ class _StreamingRetryMixin:
                             useragent_group=useragent_group,
                             conversation_id=conversation_id,
                             client_ip=client_ip,
+                            usage_tag=usage_tag,
                         )
                         return
             # File and previous-response ownership are peers, not fallback
@@ -1060,6 +1065,7 @@ class _StreamingRetryMixin:
                         useragent_group=useragent_group,
                         conversation_id=conversation_id,
                         client_ip=client_ip,
+                        usage_tag=usage_tag,
                     )
                     yield format_sse_event(_facade()._proxy_request_timeout_event(request_id))
                     return
@@ -1117,6 +1123,7 @@ class _StreamingRetryMixin:
                                 useragent_group=useragent_group,
                                 conversation_id=conversation_id,
                                 client_ip=client_ip,
+                                usage_tag=usage_tag,
                             )
                             yield format_sse_event(_facade()._proxy_request_timeout_event(request_id))
                             return
@@ -1309,6 +1316,7 @@ class _StreamingRetryMixin:
                             useragent=useragent,
                             useragent_group=useragent_group,
                             client_ip=client_ip,
+                            usage_tag=usage_tag,
                         )
                         if propagate_http_errors:
                             raise ProxyResponseError(status_code, error_payload)
@@ -1350,6 +1358,7 @@ class _StreamingRetryMixin:
                             useragent_group=useragent_group,
                             conversation_id=conversation_id,
                             client_ip=client_ip,
+                            usage_tag=usage_tag,
                         )
                         if propagate_http_errors:
                             raise ProxyResponseError(
@@ -1407,6 +1416,7 @@ class _StreamingRetryMixin:
                             useragent_group=useragent_group,
                             conversation_id=conversation_id,
                             client_ip=client_ip,
+                            usage_tag=usage_tag,
                         )
                         return
                     if require_preferred_account and preferred_account_id is not None:
@@ -1442,6 +1452,7 @@ class _StreamingRetryMixin:
                             useragent_group=useragent_group,
                             conversation_id=conversation_id,
                             client_ip=client_ip,
+                            usage_tag=usage_tag,
                         )
                         return
                     # If a prior attempt stored a transient 500 and the caller
@@ -1478,6 +1489,7 @@ class _StreamingRetryMixin:
                             useragent_group=useragent_group,
                             conversation_id=conversation_id,
                             client_ip=client_ip,
+                            usage_tag=usage_tag,
                         )
                         return
                     no_accounts_msg = selection.error_message or "No active accounts available"
@@ -1509,6 +1521,7 @@ class _StreamingRetryMixin:
                         useragent_group=useragent_group,
                         conversation_id=conversation_id,
                         client_ip=client_ip,
+                        usage_tag=usage_tag,
                     )
                     return
 
@@ -1582,6 +1595,7 @@ class _StreamingRetryMixin:
                             useragent_group=useragent_group,
                             conversation_id=conversation_id,
                             client_ip=client_ip,
+                            usage_tag=usage_tag,
                         )
                         return
                 try:
@@ -1610,6 +1624,7 @@ class _StreamingRetryMixin:
                             useragent_group=useragent_group,
                             conversation_id=conversation_id,
                             client_ip=client_ip,
+                            usage_tag=usage_tag,
                         )
                         yield format_sse_event(_facade()._proxy_request_timeout_event(request_id))
                         return
@@ -1634,6 +1649,7 @@ class _StreamingRetryMixin:
                             useragent_group=useragent_group,
                             conversation_id=conversation_id,
                             client_ip=client_ip,
+                            usage_tag=usage_tag,
                         )
                         event = response_failed_event(
                             "upstream_proxy_unavailable",
@@ -1736,6 +1752,7 @@ class _StreamingRetryMixin:
                                     useragent_group=useragent_group,
                                     conversation_id=conversation_id,
                                     client_ip=client_ip,
+                                    usage_tag=usage_tag,
                                 )
                                 event = response_failed_event(
                                     "upstream_unavailable",
@@ -1833,6 +1850,7 @@ class _StreamingRetryMixin:
                             useragent_group=useragent_group,
                             conversation_id=conversation_id,
                             client_ip=client_ip,
+                            usage_tag=usage_tag,
                         )
                         event = response_failed_event(
                             "upstream_unavailable",
@@ -1869,6 +1887,7 @@ class _StreamingRetryMixin:
                             useragent_group=useragent_group,
                             conversation_id=conversation_id,
                             client_ip=client_ip,
+                            usage_tag=usage_tag,
                         )
                         yield format_sse_event(_facade()._proxy_request_timeout_event(request_id))
                         return
@@ -1903,6 +1922,7 @@ class _StreamingRetryMixin:
                                 useragent_group=useragent_group,
                                 conversation_id=conversation_id,
                                 client_ip=client_ip,
+                                usage_tag=usage_tag,
                                 # Let the retry path observe a pre-visible
                                 # account-recovery error only for the one case
                                 # where this owner anchor has a locally
@@ -2415,6 +2435,7 @@ class _StreamingRetryMixin:
                                 useragent_group=useragent_group,
                                 conversation_id=conversation_id,
                                 client_ip=client_ip,
+                                usage_tag=usage_tag,
                             )
                             yield format_sse_event(_facade()._proxy_request_timeout_event(request_id))
                             return
@@ -2508,6 +2529,7 @@ class _StreamingRetryMixin:
                                         useragent_group=useragent_group,
                                         conversation_id=conversation_id,
                                         client_ip=client_ip,
+                                        usage_tag=usage_tag,
                                     )
                                     event = response_failed_event(
                                         "upstream_unavailable",
@@ -2580,6 +2602,7 @@ class _StreamingRetryMixin:
                                 useragent_group=useragent_group,
                                 conversation_id=conversation_id,
                                 client_ip=client_ip,
+                                usage_tag=usage_tag,
                             )
                             event = response_failed_event(
                                 "upstream_unavailable",
@@ -2614,6 +2637,7 @@ class _StreamingRetryMixin:
                                 useragent_group=useragent_group,
                                 conversation_id=conversation_id,
                                 client_ip=client_ip,
+                                usage_tag=usage_tag,
                             )
                             yield format_sse_event(_facade()._proxy_request_timeout_event(request_id))
                             return
@@ -2998,6 +3022,7 @@ class _StreamingRetryMixin:
                         useragent_group=useragent_group,
                         conversation_id=conversation_id,
                         client_ip=client_ip,
+                        usage_tag=usage_tag,
                     )
                 return
             if last_transient_exc is not None:
@@ -3053,6 +3078,7 @@ class _StreamingRetryMixin:
                     useragent_group=useragent_group,
                     conversation_id=conversation_id,
                     client_ip=client_ip,
+                    usage_tag=usage_tag,
                 )
         finally:
             if not upstream_transport_metric_recorded:

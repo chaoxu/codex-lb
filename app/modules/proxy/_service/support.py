@@ -16,7 +16,13 @@ import anyio
 
 from app.core.auth.refresh import RefreshError, is_transient_refresh_contention, refresh_contention_kind
 from app.core.balancer.types import UpstreamError
-from app.core.clients.proxy import CodexControlRequestPrivacyPolicy, ProxyResponseError
+from app.core.clients.proxy import (
+    CODEX_LB_USAGE_TAG_ERROR_MESSAGE,
+    CODEX_LB_USAGE_TAG_HEADER,
+    CodexControlRequestPrivacyPolicy,
+    ProxyResponseError,
+    is_valid_codex_lb_usage_tag,
+)
 from app.core.clients.proxy_websocket import UpstreamWebSocket
 from app.core.config.settings import get_settings
 from app.core.errors import OpenAIErrorEnvelope, openai_error
@@ -599,6 +605,27 @@ def _request_log_client_fields(
     return useragent, useragent_group, None
 
 
+def _request_log_usage_tag(headers: Mapping[str, str]) -> str | None:
+    getlist = getattr(headers, "getlist", None)
+    values = (
+        tuple(getlist(CODEX_LB_USAGE_TAG_HEADER))
+        if callable(getlist)
+        else tuple(value for key, value in headers.items() if key.casefold() == CODEX_LB_USAGE_TAG_HEADER)
+    )
+    if not values:
+        return None
+    if len(values) != 1 or not is_valid_codex_lb_usage_tag(values[0]):
+        raise ProxyResponseError(
+            400,
+            openai_error(
+                "invalid_usage_tag",
+                CODEX_LB_USAGE_TAG_ERROR_MESSAGE,
+                error_type="invalid_request_error",
+            ),
+        )
+    return values[0]
+
+
 class _RetryableStreamError(Exception):
     def __init__(self, code: str, error: UpstreamError, *, exclude_account: bool = False) -> None:
         super().__init__(code)
@@ -908,6 +935,7 @@ class _WebSocketRequestState:
     reasoning_effort: str | None
     api_key_reservation: ApiKeyUsageReservationData | None
     started_at: float
+    usage_tag: str | None = None
     responses_lite_model: str | None = None
     latency_first_token_ms: int | None = None
     ttft_reasoning_deltas: dict[tuple[str | None, int | None, int | None], _TTFTReasoningDeltaState] = field(

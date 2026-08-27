@@ -1662,6 +1662,7 @@ async def test_internal_bridge_responses_disables_openai_sdk_contract(
         original_affinity_key="sid-abc",
         reservation=None,
         signature_version="2",
+        usage_tag="guidance-v1/baseline--r02/attempt-1",
     )
     fake_forwarded = bridge_module.HTTPBridgeForwardedRequest(context=fake_context)
 
@@ -1712,6 +1713,7 @@ async def test_internal_bridge_responses_disables_openai_sdk_contract(
     forwarded_headers = kwargs.get("forwarded_headers")
     assert isinstance(forwarded_headers, dict)
     assert "x-codex-turn-state" not in forwarded_headers
+    assert forwarded_headers["x-codex-lb-usage-tag"] == "guidance-v1/baseline--r02/attempt-1"
 
 
 @pytest.mark.asyncio

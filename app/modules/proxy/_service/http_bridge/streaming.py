@@ -168,6 +168,7 @@ from app.modules.proxy._service.support import (
     _HTTPBridgeSession,
     _HTTPBridgeSessionKey,
     _is_local_account_cap_code,
+    _request_log_usage_tag,
     _signal_propagated_capacity_startup_ready,
     _signal_propagated_capacity_startup_wait,
     _signal_propagated_responses_service_cleanup_ready,
@@ -880,6 +881,7 @@ class _HTTPBridgeStreamingMixin:
     ) -> AsyncIterator[str]:
         _maybe_log_proxy_request_payload("stream_http", payload, headers)
         proxy_api_authorization = _header_value_case_insensitive(headers, "authorization")
+        usage_tag = _request_log_usage_tag(headers)
         filtered = filter_inbound_headers(headers)
         return self._stream_http_bridge_or_retry(
             payload,
@@ -902,6 +904,7 @@ class _HTTPBridgeStreamingMixin:
             enforce_openai_sdk_contract=enforce_openai_sdk_contract,
             capacity_startup_wait_event=capacity_startup_wait_event,
             capacity_startup_ready_event=capacity_startup_ready_event,
+            usage_tag=usage_tag,
         )
 
     async def _stream_http_bridge_or_retry(
@@ -927,6 +930,7 @@ class _HTTPBridgeStreamingMixin:
         enforce_openai_sdk_contract: bool = True,
         capacity_startup_wait_event: asyncio.Event | None = None,
         capacity_startup_ready_event: asyncio.Event | None = None,
+        usage_tag: str | None = None,
     ) -> AsyncIterator[str]:
         dashboard_settings = await _service_get_settings_cache().get()
         runtime_config = _http_bridge_runtime_config(dashboard_settings, _service_get_settings())
@@ -979,6 +983,7 @@ class _HTTPBridgeStreamingMixin:
                 upstream_stream_transport_override=force_upstream_stream_transport,
                 client_ip=client_ip,
                 enforce_openai_sdk_contract=enforce_openai_sdk_contract,
+                usage_tag=usage_tag,
             ):
                 yield line
             return
@@ -1013,6 +1018,7 @@ class _HTTPBridgeStreamingMixin:
                 capacity_startup_wait_event=capacity_startup_wait_event,
                 capacity_startup_ready_event=capacity_startup_ready_event,
                 deferred_account_backoff_tracker=deferred_account_backoff_tracker,
+                usage_tag=usage_tag,
             ):
                 yield line
         finally:
@@ -1076,6 +1082,7 @@ class _HTTPBridgeStreamingMixin:
         capacity_startup_wait_event: asyncio.Event | None = None,
         capacity_startup_ready_event: asyncio.Event | None = None,
         deferred_account_backoff_tracker: _DeferredAccountBackoffTracker | None = None,
+        usage_tag: str | None = None,
     ) -> AsyncIterator[str]:
         del suppress_text_done_events
         dead_owner_anchor = False
@@ -1150,6 +1157,7 @@ class _HTTPBridgeStreamingMixin:
                 )
             request_state.capacity_startup_wait_event = capacity_startup_wait_event
             request_state.capacity_startup_ready_event = capacity_startup_ready_event
+            request_state.usage_tag = usage_tag
             lifecycle = begin_bridge_lifecycle(request_state.api_key_reservation)
             request_state.deferred_account_error_backoffs = lifecycle.pending_backoffs
             request_state.deferred_account_backoff_tracker = deferred_account_backoff_tracker
@@ -2181,6 +2189,7 @@ class _HTTPBridgeStreamingMixin:
                     request_started_at=request_state.started_at,
                     proxy_api_authorization=proxy_api_authorization,
                     client_ip=client_ip,
+                    usage_tag=usage_tag,
                 ):
                     forwarded_any = True
                     yield line

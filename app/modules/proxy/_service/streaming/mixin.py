@@ -1,5 +1,5 @@
 # pyright: reportGeneralTypeIssues=false
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import asyncio
 import sys
@@ -282,11 +282,7 @@ from app.modules.proxy._service.streaming.helpers import (
 )
 from app.modules.proxy._service.streaming.helpers import (
     _raw_stream_error_fields as _raw_error_fields,
-)
-from app.modules.proxy._service.streaming.helpers import (
     _resolve_upstream_route_for_account as _resolve_upstream_route_for_account_helper,
-)
-from app.modules.proxy._service.streaming.helpers import (
     _select_account_with_budget_for_stream as _select_account_with_budget_for_stream_helper,
 )
 from app.modules.proxy._service.streaming.protocol import _StreamingServiceProtocol
@@ -298,6 +294,7 @@ from app.modules.proxy._service.support import (
     _WEBSOCKET_FULL_REPLAY_WAIT_POLL_SECONDS,  # noqa: F401
     _ApiKeyReservationTouchState,
     _finalize_ttft_latency_ms,
+    _request_log_usage_tag,
     _RequestLogFailureMetadata,
     _RetryableStreamError,
     _StreamSettlement,
@@ -468,6 +465,7 @@ class _StreamingMixin(_StreamingRetryMixin):
             request_transport=request_transport,
             client_ip=client_ip,
             enforce_openai_sdk_contract=enforce_openai_sdk_contract,
+            usage_tag=_request_log_usage_tag(headers),
         )
 
     async def _stream_once(
@@ -491,6 +489,7 @@ class _StreamingMixin(_StreamingRetryMixin):
         useragent_group: str | None = None,
         conversation_id: str | None = None,
         client_ip: str | None = None,
+        usage_tag: str | None = None,
         preferred_account_id: str | None = None,
         tool_call_dedupe: _WebSocketUpstreamControl | None = None,
         enforce_openai_sdk_contract: bool = True,
@@ -1092,6 +1091,7 @@ class _StreamingMixin(_StreamingRetryMixin):
                 useragent_group=useragent_group,
                 conversation_id=conversation_id,
                 client_ip=client_ip,
+                usage_tag=usage_tag,
             )
             _maybe_log_proxy_service_tier_trace(
                 "stream",

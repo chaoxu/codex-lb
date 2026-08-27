@@ -12,6 +12,7 @@ from aiohttp import web
 from aiohttp.multipart import BodyPartReader
 from sqlalchemy import select
 
+import app.modules.proxy.api as proxy_api
 from app.core.utils.time import utcnow
 from app.db.models import ApiKeyUsageReservation, RequestLog
 from app.db.session import SessionLocal
@@ -25,6 +26,28 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+@pytest.mark.asyncio
+async def test_source_audio_rejects_invalid_usage_tag_before_source_selection(async_client, monkeypatch):
+    source_selection_calls = 0
+
+    async def fail_if_selected(*_args, **_kwargs):
+        nonlocal source_selection_calls
+        source_selection_calls += 1
+        raise AssertionError("invalid usage tag reached audio source selection")
+
+    monkeypatch.setattr(proxy_api, "_select_audio_transcriptions_model_source", fail_if_selected)
+    response = await async_client.post(
+        "/v1/audio/transcriptions",
+        data={"model": "whisper-large-v3"},
+        files={"file": ("sample.wav", b"audio", "audio/wav")},
+        headers={"X-Codex-LB-Usage-Tag": "invalid tag with spaces"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_usage_tag"
+    assert source_selection_calls == 0
 
 
 async def _create_model_source(

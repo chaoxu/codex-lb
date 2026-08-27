@@ -2120,6 +2120,43 @@ def test_replica_guardrails_migration_round_trips_with_version_backfill(tmp_path
         engine.dispose()
 
 
+def test_request_usage_tag_migration_is_additive_reversible_and_single_head(tmp_path: Path) -> None:
+    from alembic.script import ScriptDirectory
+
+    db_path = tmp_path / "request-usage-tag.db"
+    url = _db_url(db_path)
+    parent_revision = "20260816_000000_add_model_source_embeddings"
+    target_revision = "20260827_000000_add_request_usage_tag"
+
+    run_upgrade(url, parent_revision, bootstrap_legacy=False)
+    config = _build_alembic_config(url)
+    script_directory = ScriptDirectory.from_config(config)
+    assert script_directory.get_heads() == [target_revision]
+
+    engine = create_engine(to_sync_database_url(url))
+    try:
+        with engine.connect() as connection:
+            inspector = inspect(connection)
+            assert "usage_tag" not in {column["name"] for column in inspector.get_columns("request_logs")}
+
+        command.upgrade(config, target_revision)
+        with engine.connect() as connection:
+            inspector = inspect(connection)
+            columns = {column["name"]: column for column in inspector.get_columns("request_logs")}
+            indexes = {index["name"] for index in inspector.get_indexes("request_logs")}
+            assert columns["usage_tag"]["nullable"] is True
+            assert cast(sa.String, columns["usage_tag"]["type"]).length == 128
+            assert "idx_logs_usage_tag" in indexes
+
+        command.downgrade(config, parent_revision)
+        with engine.connect() as connection:
+            inspector = inspect(connection)
+            assert "usage_tag" not in {column["name"] for column in inspector.get_columns("request_logs")}
+            assert "idx_logs_usage_tag" not in {index["name"] for index in inspector.get_indexes("request_logs")}
+    finally:
+        engine.dispose()
+
+
 def test_capability_lineage_migration_is_additive_reversible_and_single_head(tmp_path: Path) -> None:
     from alembic.script import ScriptDirectory
 
