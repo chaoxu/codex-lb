@@ -88,6 +88,19 @@ def _normalize_usage(usage: UsageTokens | ResponseUsage | None) -> UsageTokens |
 
 
 DEFAULT_PRICING_MODELS: dict[str, ModelPrice] = {
+    "gpt-6-astra": ModelPrice(
+        input_per_1m=10.0,
+        cached_input_per_1m=1.0,
+        output_per_1m=50.0,
+        priority_multiplier=2.0,
+        flex_input_per_1m=5.0,
+        flex_cached_input_per_1m=0.5,
+        flex_output_per_1m=25.0,
+        long_context_threshold_tokens=272_000,
+        long_context_input_per_1m=20.0,
+        long_context_cached_input_per_1m=2.0,
+        long_context_output_per_1m=75.0,
+    ),
     "gpt-5.6-sol": ModelPrice(
         input_per_1m=5.0,
         cached_input_per_1m=0.5,
@@ -428,6 +441,15 @@ def _effective_rates(
     cached_rate = price.cached_input_per_1m if price.cached_input_per_1m is not None else input_rate
     output_rate = price.output_per_1m
 
+    if is_long_context:
+        assert price.long_context_input_per_1m is not None
+        assert price.long_context_output_per_1m is not None
+        input_rate = price.long_context_input_per_1m
+        cached_rate = (
+            price.long_context_cached_input_per_1m if price.long_context_cached_input_per_1m is not None else input_rate
+        )
+        output_rate = price.long_context_output_per_1m
+
     if _uses_priority_tier(service_tier):
         if price.priority_input_per_1m is not None and price.priority_output_per_1m is not None:
             priority_cached = (
@@ -451,15 +473,6 @@ def _effective_rates(
             cached_rate *= 2.0
             output_rate *= 1.5
         return input_rate, cached_rate, output_rate
-
-    if is_long_context:
-        assert price.long_context_input_per_1m is not None
-        assert price.long_context_output_per_1m is not None
-        input_rate = price.long_context_input_per_1m
-        cached_rate = (
-            price.long_context_cached_input_per_1m if price.long_context_cached_input_per_1m is not None else input_rate
-        )
-        output_rate = price.long_context_output_per_1m
 
     return input_rate, cached_rate, output_rate
 
